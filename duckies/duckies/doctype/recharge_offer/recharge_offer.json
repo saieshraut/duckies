@@ -1,0 +1,110 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:offer_name",
+ "creation": "2026-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "offer_name",
+  "min_recharge_amount",
+  "bonus_type",
+  "bonus_amount",
+  "bonus_percent",
+  "valid_from",
+  "valid_to",
+  "is_active"
+ ],
+ "fields": [
+  {
+   "fieldname": "offer_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Offer Name",
+   "reqd": 1
+  },
+  {
+   "description": "Offer applies when a single recharge is at least this much",
+   "fieldname": "min_recharge_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Min Recharge Amount",
+   "reqd": 1
+  },
+  {
+   "default": "Fixed Amount",
+   "fieldname": "bonus_type",
+   "fieldtype": "Select",
+   "label": "Bonus Type",
+   "options": "Fixed Amount\nPercent",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.bonus_type=='Fixed Amount'",
+   "fieldname": "bonus_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Bonus Amount"
+  },
+  {
+   "depends_on": "eval:doc.bonus_type=='Percent'",
+   "fieldname": "bonus_percent",
+   "fieldtype": "Float",
+   "label": "Bonus Percent"
+  },
+  {
+   "fieldname": "valid_from",
+   "fieldtype": "Date",
+   "label": "Valid From"
+  },
+  {
+   "fieldname": "valid_to",
+   "fieldtype": "Date",
+   "label": "Valid To"
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Is Active"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Duckies",
+ "name": "Recharge Offer",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Cafe Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

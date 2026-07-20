@@ -1,0 +1,138 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "sb_company",
+  "company",
+  "wallet_liability_account",
+  "deposit_account",
+  "promo_expense_account",
+  "sb_wallet",
+  "enforce_wallet_only",
+  "min_recharge_amount",
+  "cancellation_cutoff_hours",
+  "sb_menu",
+  "menu_root_item_group",
+  "sb_rzp",
+  "razorpay_key_id",
+  "razorpay_key_secret",
+  "razorpay_webhook_secret"
+ ],
+ "fields": [
+  {
+   "fieldname": "sb_company",
+   "fieldtype": "Section Break",
+   "label": "Accounting"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company"
+  },
+  {
+   "description": "Current liability account holding unspent wallet balances",
+   "fieldname": "wallet_liability_account",
+   "fieldtype": "Link",
+   "label": "Wallet Liability Account",
+   "options": "Account"
+  },
+  {
+   "description": "Bank / Razorpay settlement account debited on recharge",
+   "fieldname": "deposit_account",
+   "fieldtype": "Link",
+   "label": "Deposit Account",
+   "options": "Account"
+  },
+  {
+   "description": "Expense account debited for recharge bonuses",
+   "fieldname": "promo_expense_account",
+   "fieldtype": "Link",
+   "label": "Promo Expense Account",
+   "options": "Account"
+  },
+  {
+   "fieldname": "sb_wallet",
+   "fieldtype": "Section Break",
+   "label": "Wallet Rules"
+  },
+  {
+   "default": "1",
+   "description": "Block POS invoices paid by anything other than the Wallet",
+   "fieldname": "enforce_wallet_only",
+   "fieldtype": "Check",
+   "label": "Enforce Wallet Only"
+  },
+  {
+   "default": "100",
+   "fieldname": "min_recharge_amount",
+   "fieldtype": "Currency",
+   "label": "Min Recharge Amount"
+  },
+  {
+   "default": "4",
+   "description": "Bookings can be cancelled for a full refund up to this many hours before the event",
+   "fieldname": "cancellation_cutoff_hours",
+   "fieldtype": "Int",
+   "label": "Cancellation Cutoff Hours"
+  },
+  {
+   "fieldname": "sb_menu",
+   "fieldtype": "Section Break",
+   "label": "Menu"
+  },
+  {
+   "description": "Web app shows saleable items under this group",
+   "fieldname": "menu_root_item_group",
+   "fieldtype": "Link",
+   "label": "Menu Root Item Group",
+   "options": "Item Group"
+  },
+  {
+   "fieldname": "sb_rzp",
+   "fieldtype": "Section Break",
+   "label": "Razorpay"
+  },
+  {
+   "fieldname": "razorpay_key_id",
+   "fieldtype": "Data",
+   "label": "Razorpay Key Id"
+  },
+  {
+   "fieldname": "razorpay_key_secret",
+   "fieldtype": "Password",
+   "label": "Razorpay Key Secret"
+  },
+  {
+   "fieldname": "razorpay_webhook_secret",
+   "fieldtype": "Password",
+   "label": "Razorpay Webhook Secret"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Duckies",
+ "name": "Duckies Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
