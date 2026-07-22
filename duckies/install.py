@@ -290,6 +290,25 @@ def setup_accounts(company: str):
             "deposit_account": s.deposit_account}
 
 
+def _any_output_gst_account(company: str):
+    """Return an existing *output* GST account for the company (created by
+    india_compliance during GST setup). Prefers SGST/CGST output accounts."""
+    candidates = frappe.get_all(
+        "Account",
+        filters={"company": company, "account_type": "Tax", "is_group": 0},
+        fields=["name", "account_name"])
+    # Prefer an output GST account; fall back to any tax account.
+    for c in candidates:
+        an = (c.account_name or "").lower()
+        if "output" in an and ("sgst" in an or "cgst" in an or "gst" in an):
+            return c.name
+    for c in candidates:
+        an = (c.account_name or "").lower()
+        if "sgst" in an or "cgst" in an or "gst" in an:
+            return c.name
+    return candidates[0].name if candidates else None
+
+
 @frappe.whitelist()
 def setup_tax_templates(company: str):
     """Create Item Tax Templates for the three redemption rates and attach
@@ -297,10 +316,12 @@ def setup_tax_templates(company: str):
 
       * Events / amusement           -> 18% GST (SAC 9996)
       * Food & non-alcoholic         -> 5% GST (restaurant, no ITC)
-      * Alcohol                      -> OUTSIDE GST; Goa VAT (rate set by CA)
+      * Alcohol                      -> Non-GST template (Goa VAT applied
+                                        separately via a Sales Taxes template)
 
-    Rates below are defaults for convenience — CONFIRM every rate and account
-    head with your CA before go-live. VAT rate is left at 0 for you to set.
+    GST rates are defaults — CONFIRM every rate with your CA before go-live.
+    Reuses india_compliance's existing GST accounts rather than creating new
+    ones. Set up the Goa VAT (Sales Taxes and Charges Template) separately.
     """
     frappe.only_for("System Manager")
     abbr = frappe.db.get_value("Company", company, "abbr")
@@ -324,19 +345,28 @@ def setup_tax_templates(company: str):
         return acc.name
 
     def item_tax_template(title, entries, gst_treatment="Taxable"):
-        full = f"{title} - {abbr}"
-        if frappe.db.exists("Item Tax Template", {"title": title, "company": company}):
-            return full
+        existing = frappe.db.get_value(
+            "Item Tax Template", {"title": title, "company": company}, "name")
+        if existing:
+            return existing
         payload = {
             "doctype": "Item Tax Template", "title": title, "company": company,
             "taxes": [{"tax_type": acc, "tax_rate": rate} for acc, rate in entries],
         }
-        # india_compliance adds a GST Treatment field. Alcohol is outside GST
-        # (Non-GST) and must carry NO tax rows — a 0% taxable row is rejected.
+        # india_compliance adds a GST Treatment field. Alcohol is Non-GST, but
+        # the taxes table is still MANDATORY — so a Non-GST template needs one
+        # row at 0% pointing at a GST account. The 0% rate is accepted *because*
+        # the treatment is Non-GST (a Taxable 0% row is what gets rejected).
         if frappe.get_meta("Item Tax Template").has_field("gst_treatment"):
             payload["gst_treatment"] = gst_treatment
-            if gst_treatment != "Taxable":
-                payload["taxes"] = []
+            if gst_treatment != "Taxable" and not payload["taxes"]:
+                zero_acc = _any_output_gst_account(company)
+                if not zero_acc:
+                    frappe.throw(
+                        "No output GST account found for {0}. Complete GST "
+                        "setup (india_compliance) for this company first, then "
+                        "re-run.".format(company))
+                payload["taxes"] = [{"tax_type": zero_acc, "tax_rate": 0.0}]
         doc = frappe.get_doc(payload)
         doc.flags.ignore_permissions = True
         doc.insert()

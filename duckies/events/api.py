@@ -69,7 +69,18 @@ def book_event(customer: str, event: str, seats: int = 1):
 
 
 def cancel_booking(customer: str, booking_name: str):
-    """Full refund if cancelled before the cutoff (Duckies Settings)."""
+    """Cancel a booking and refund the wallet.
+
+    Design: we do NOT cancel the original Sales Invoice (cancelling a settled,
+    GST-linked invoice fights a chain of ERPNext guards and is the wrong
+    accounting model anyway). Instead we:
+      1. post the wallet Refund directly, back to the same buckets the spend
+         came from (bonus->bonus, cash->cash);
+      2. raise a Credit Note (return invoice) so the books reverse cleanly and
+         GST is handled the proper way;
+      3. release the seats and mark the booking Cancelled.
+    The original invoice stays on record, as it should.
+    """
     booking = frappe.get_doc("Event Booking", booking_name)
     if booking.customer != customer:
         frappe.throw(_("This booking does not belong to you."),
@@ -90,14 +101,14 @@ def cancel_booking(customer: str, booking_name: str):
             title=_("Too Late to Cancel"),
         )
 
-    # Cancelling the invoice triggers the wallet Refund credit via hook —
-    # one refund path for everything.
-    if booking.sales_invoice:
-        si = frappe.get_doc("Sales Invoice", booking.sales_invoice)
-        if si.docstatus == 1:
-            si.flags.ignore_permissions = True
-            si.cancel()
+    # 1. Refund the wallet to the original buckets (idempotent).
+    _refund_booking_to_wallet(booking)
 
+    # 2. Credit Note for the books (non-fatal; wallet refund already done).
+    if booking.sales_invoice:
+        _make_credit_note(booking.sales_invoice)
+
+    # 3. Release seats and close the booking.
     _lock_event(ev.name)
     ev.db_set(
         "seats_booked",
@@ -106,3 +117,76 @@ def cancel_booking(customer: str, booking_name: str):
     )
     booking.db_set("status", "Cancelled")
     return booking
+
+
+def _refund_booking_to_wallet(booking):
+    """Post Refund credits mirroring the original Spend debits for this
+    booking's invoice. Idempotent via a [refund:<invoice>] remarks tag."""
+    from duckies.wallet.api import credit
+
+    invoice = booking.sales_invoice
+    if not invoice:
+        return
+
+    refund_tag = f"[refund:{invoice}]"
+    if frappe.db.exists("Wallet Transaction", {
+        "customer": booking.customer, "direction": "Credit", "docstatus": 1,
+        "transaction_type": "Refund", "remarks": ("like", f"%{refund_tag}%")}):
+        return  # already refunded
+
+    rows = frappe.get_all(
+        "Wallet Transaction",
+        filters={"customer": booking.customer, "direction": "Debit",
+                 "docstatus": 1, "reference_doctype": "Sales Invoice",
+                 "reference_name": invoice},
+        fields=["bucket", "amount"])
+    per_bucket = {"Cash": 0.0, "Bonus": 0.0}
+    for r in rows:
+        per_bucket[r.bucket] = per_bucket.get(r.bucket, 0.0) + flt(r.amount)
+
+    for bucket, bamt in per_bucket.items():
+        if bamt > 0:
+            credit(
+                booking.customer, bamt, "Refund", bucket,
+                "Customer", booking.customer,
+                remarks=_("Refund for cancelled booking (invoice {0}) {1}")
+                        .format(invoice, refund_tag),
+            )
+
+
+def _make_credit_note(invoice_name):
+    """Create + submit a return Sales Invoice (Credit Note) against the
+    original. Non-fatal: logged if it fails, since the wallet refund — the
+    customer-facing part — has already succeeded."""
+    try:
+        si = frappe.get_doc("Sales Invoice", invoice_name)
+        if si.docstatus != 1:
+            return
+        # Guard against a duplicate credit note for the same invoice.
+        if frappe.db.exists("Sales Invoice",
+                            {"return_against": invoice_name, "docstatus": 1}):
+            return
+        cn = frappe.get_doc({
+            "doctype": "Sales Invoice",
+            "customer": si.customer,
+            "company": si.company,
+            "is_return": 1,
+            "return_against": si.name,
+            "update_stock": 0,
+            "items": [
+                {
+                    "item_code": it.item_code,
+                    "qty": -abs(it.qty),
+                    "rate": it.rate,
+                }
+                for it in si.items
+            ],
+        })
+        cn.flags.ignore_permissions = True
+        cn.set_missing_values()
+        cn.calculate_taxes_and_totals()
+        cn.insert()
+        cn.submit()
+    except Exception:
+        frappe.log_error(title=f"Credit note failed for {invoice_name}",
+                         message=frappe.get_traceback())

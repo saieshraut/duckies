@@ -16,6 +16,10 @@ WEEKDAY_FIELDS = ["monday", "tuesday", "wednesday", "thursday",
                   "friday", "saturday", "sunday"]
 
 EVENT_ITEM_GROUP = "Events"
+# SAC 999699 — "Other amusement and recreational services" (heading 9996,
+# recreational/cultural/sporting). Covers court play, games, screenings,
+# workshops. india_compliance requires an HSN/SAC on every sales item.
+EVENT_SAC_CODE = "999699"
 
 
 def get_or_create_event_item(event_name: str) -> str:
@@ -26,6 +30,8 @@ def get_or_create_event_item(event_name: str) -> str:
         return item_code
 
     _ensure_item_group()
+    _ensure_sac_code(EVENT_SAC_CODE)
+
     item = frappe.get_doc({
         "doctype": "Item",
         "item_code": item_code,
@@ -36,10 +42,37 @@ def get_or_create_event_item(event_name: str) -> str:
         "is_purchase_item": 0,
         "include_item_in_manufacturing": 0,
         "stock_uom": "Nos",
+        "gst_hsn_code": EVENT_SAC_CODE,
     })
+    # Attach the 18% GST item tax template if it exists (created by
+    # duckies.install.setup_tax_templates).
+    company = frappe.defaults.get_user_default("Company") or frappe.db.get_value(
+        "Duckies Settings", "Duckies Settings", "company")
+    tmpl = frappe.db.get_value(
+        "Item Tax Template", {"title": "GST 18%", "company": company}, "name") \
+        if company else None
+    if tmpl:
+        item.append("taxes", {"item_tax_template": tmpl})
+
     item.flags.ignore_permissions = True
     item.insert(ignore_mandatory=True)
     return item.name
+
+
+def _ensure_sac_code(code: str):
+    """india_compliance ships the GST HSN Code master, but a given SAC row may
+    not exist yet. Create it if missing so item insert doesn't fail."""
+    if not frappe.db.exists("GST HSN Code", code):
+        try:
+            frappe.get_doc({
+                "doctype": "GST HSN Code", "hsn_code": code,
+                "description": "Other amusement and recreational services",
+            }).insert(ignore_permissions=True)
+        except Exception:
+            # Master may be validated/locked on some setups; item insert will
+            # still pass if the code is otherwise accepted.
+            frappe.log_error(title=f"Could not create SAC {code}",
+                             message=frappe.get_traceback())
 
 
 def _ensure_item_group():
