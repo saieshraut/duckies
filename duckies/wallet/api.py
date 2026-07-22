@@ -181,13 +181,17 @@ def get_applicable_bonus(amount: float):
     return best, best_offer
 
 
-def apply_recharge(customer, amount, ref_dt=None, ref_dn=None, remarks=None):
+def apply_recharge(customer, amount, ref_dt=None, ref_dn=None, remarks=None,
+                   deposit_account=None):
     """Credit Cash bucket + any Bonus bucket, AND post the accounting Journal
     Entry. This is the single recharge entry point — every path (Razorpay
     webhook, offline front-desk, direct call) goes through here, so the books
     are always in sync with the wallet ledger.
 
-    Returns (cash_txn, bonus_txn|None, bonus_amount)."""
+    ``deposit_account`` overrides the default deposit account (e.g. front-desk
+    Cash-in-hand vs bank vs UPI settlement). Falls back to Duckies Settings.
+
+    Returns (cash_txn, bonus_txn|None, bonus_amount, journal_entry_name)."""
     cash_txn = credit(customer, amount, "Recharge", "Cash",
                       ref_dt, ref_dn, remarks)
     bonus, offer = get_applicable_bonus(amount)
@@ -198,11 +202,12 @@ def apply_recharge(customer, amount, ref_dt=None, ref_dn=None, remarks=None):
 
     # Accounting: Dr Bank/Razorpay + Dr Promo Expense / Cr Wallet Liability.
     je_name = post_recharge_accounting(customer, flt(amount), flt(bonus),
-                                       ref_dt, ref_dn)
+                                       ref_dt, ref_dn, deposit_account)
     return cash_txn, bonus_txn, bonus, je_name
 
 
-def post_recharge_accounting(customer, amount, bonus, ref_dt=None, ref_dn=None):
+def post_recharge_accounting(customer, amount, bonus, ref_dt=None, ref_dn=None,
+                             deposit_account=None):
     """Dr Bank/Razorpay (cash) + Dr Promo Expense (bonus) / Cr Wallet
     Liability. Non-fatal: a misconfigured account is logged, never blocks the
     customer's wallet credit — accounts can repost from the Error Log.
@@ -210,8 +215,9 @@ def post_recharge_accounting(customer, amount, bonus, ref_dt=None, ref_dn=None):
     Returns the Journal Entry name, or None if skipped/failed."""
     s = frappe.get_cached_doc("Duckies Settings")
     ref = f"{ref_dt} {ref_dn}".strip() if ref_dt else customer
+    deposit = deposit_account or s.deposit_account
 
-    if not (s.company and s.wallet_liability_account and s.deposit_account):
+    if not (s.company and s.wallet_liability_account and deposit):
         frappe.log_error(
             title=f"Recharge accounting skipped ({customer})",
             message="Set company / wallet_liability_account / deposit_account "
@@ -219,7 +225,7 @@ def post_recharge_accounting(customer, amount, bonus, ref_dt=None, ref_dn=None):
         return None
     try:
         accounts = [
-            {"account": s.deposit_account,
+            {"account": deposit,
              "debit_in_account_currency": flt(amount)},
             {"account": s.wallet_liability_account,
              "credit_in_account_currency": flt(amount)},
@@ -254,26 +260,25 @@ def post_recharge_accounting(customer, amount, bonus, ref_dt=None, ref_dn=None):
 # --------------------------------------------------------------------------
 
 @frappe.whitelist()
-def offline_recharge(customer, amount, remarks=None):
-    """Front-desk recharge. Section 269ST: never accept >= INR 2,00,000 cash
-    from one person — keep offline loads on UPI."""
+def offline_recharge(customer, amount, payment_mode="Cash", remarks=None,
+                     payment_account=None, payment_reference=None):
+    """Front-desk recharge. Creates + submits an Offline Recharge Request,
+    which loads the wallet and posts accounting via its on_submit. Staff can
+    also do this straight from the Recharge Request form in the desk."""
     frappe.only_for(("System Manager", "Cafe Manager"))
-    amount = flt(amount)
-    s = frappe.get_cached_doc("Duckies Settings")
-    if amount < flt(s.min_recharge_amount):
-        frappe.throw(_("Minimum recharge is {0}.").format(s.min_recharge_amount))
-    if amount >= 200000:
-        frappe.throw(_("Single cash receipts of Rs 2,00,000 or more are barred "
-                       "under Section 269ST. Please split or use a bank/UPI "
-                       "transfer recorded separately."))
-
     req = frappe.get_doc({
-        "doctype": "Recharge Request", "customer": customer,
-        "amount": amount, "status": "Pending", "channel": "Offline",
-    }).insert(ignore_permissions=True)
-
-    from duckies.payments.razorpay import settle_recharge_request
-    settle_recharge_request(req.name, payment_id=None, remarks=remarks)
+        "doctype": "Recharge Request",
+        "customer": customer,
+        "amount": flt(amount),
+        "channel": "Offline",
+        "payment_mode": payment_mode,
+        "payment_account": payment_account,
+        "payment_reference": payment_reference,
+        "status": "Pending",
+    })
+    req.flags.ignore_permissions = True
+    req.insert()
+    req.submit()  # on_submit -> wallet credit + accounting
     req.reload()
     cash, bonus = get_buckets(customer)
     return {"recharge_request": req.name, "bonus": req.bonus_amount,

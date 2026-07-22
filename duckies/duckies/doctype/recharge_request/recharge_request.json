@@ -6,19 +6,34 @@
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
+ "is_submittable": 1,
  "field_order": [
+  "sb_main",
   "customer",
   "amount",
-  "bonus_amount",
-  "status",
+  "cb_main",
   "channel",
-  "razorpay_order_id",
-  "razorpay_payment_id",
+  "payment_mode",
+  "payment_account",
+  "payment_reference",
+  "sb_result",
+  "status",
+  "bonus_amount",
+  "cb_result",
   "wallet_transaction",
   "bonus_wallet_transaction",
-  "journal_entry"
+  "journal_entry",
+  "sb_online",
+  "razorpay_order_id",
+  "razorpay_payment_id",
+  "amended_from"
  ],
  "fields": [
+  {
+   "fieldname": "sb_main",
+   "fieldtype": "Section Break",
+   "label": "Recharge"
+  },
   {
    "fieldname": "customer",
    "fieldtype": "Link",
@@ -32,14 +47,51 @@
    "fieldtype": "Currency",
    "in_list_view": 1,
    "label": "Amount",
-   "reqd": 1
+   "reqd": 1,
+   "description": "Money loaded into the wallet (bonus, if any, is added automatically)"
   },
   {
-   "fieldname": "bonus_amount",
-   "fieldtype": "Currency",
+   "fieldname": "cb_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Offline",
+   "fieldname": "channel",
+   "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "Bonus Amount",
-   "read_only": 1
+   "label": "Channel",
+   "options": "Online\nOffline",
+   "description": "Offline = front-desk. Online = Razorpay (set automatically)."
+  },
+  {
+   "fieldname": "payment_mode",
+   "fieldtype": "Select",
+   "label": "Payment Received Via",
+   "options": "\nCash\nUPI\nCard\nBank Transfer\nOther",
+   "depends_on": "eval:doc.channel=='Offline'",
+   "mandatory_depends_on": "eval:doc.channel=='Offline'",
+   "in_list_view": 1,
+   "description": "How the customer paid you at the counter"
+  },
+  {
+   "fieldname": "payment_account",
+   "fieldtype": "Link",
+   "label": "Deposit To Account",
+   "options": "Account",
+   "depends_on": "eval:doc.channel=='Offline'",
+   "description": "Where the money landed (Cash-in-hand, bank, UPI settlement). Defaults from Duckies Settings if left blank."
+  },
+  {
+   "fieldname": "payment_reference",
+   "fieldtype": "Data",
+   "label": "Payment Reference / UTR",
+   "depends_on": "eval:doc.channel=='Offline' && doc.payment_mode!='Cash'",
+   "description": "UPI ref / card slip / UTR number, for reconciliation"
+  },
+  {
+   "fieldname": "sb_result",
+   "fieldtype": "Section Break",
+   "label": "Result"
   },
   {
    "default": "Pending",
@@ -47,28 +99,19 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Pending\nPaid\nFailed\nExpired"
-  },
-  {
-   "default": "Online",
-   "fieldname": "channel",
-   "fieldtype": "Select",
-   "label": "Channel",
-   "options": "Online\nOffline"
-  },
-  {
-   "fieldname": "razorpay_order_id",
-   "fieldtype": "Data",
-   "label": "Razorpay Order Id",
-   "read_only": 1,
-   "search_index": 1,
-   "unique": 1
-  },
-  {
-   "fieldname": "razorpay_payment_id",
-   "fieldtype": "Data",
-   "label": "Razorpay Payment Id",
+   "options": "Pending\nPaid\nFailed\nExpired",
    "read_only": 1
+  },
+  {
+   "fieldname": "bonus_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Bonus Applied",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cb_result",
+   "fieldtype": "Column Break"
   },
   {
    "fieldname": "wallet_transaction",
@@ -90,6 +133,36 @@
    "label": "Journal Entry",
    "options": "Journal Entry",
    "read_only": 1
+  },
+  {
+   "fieldname": "sb_online",
+   "fieldtype": "Section Break",
+   "label": "Online (Razorpay)",
+   "collapsible": 1,
+   "depends_on": "eval:doc.channel=='Online'"
+  },
+  {
+   "fieldname": "razorpay_order_id",
+   "fieldtype": "Data",
+   "label": "Razorpay Order Id",
+   "read_only": 1,
+   "search_index": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "razorpay_payment_id",
+   "fieldtype": "Data",
+   "label": "Razorpay Payment Id",
+   "read_only": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "options": "Recharge Request",
+   "read_only": 1,
+   "no_copy": 1,
+   "print_hide": 1
   }
  ],
  "index_web_pages_for_search": 0,
@@ -101,28 +174,14 @@
  "owner": "Administrator",
  "permissions": [
   {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "System Manager",
-   "share": 1,
-   "write": 1
+   "create": 1, "delete": 1, "email": 1, "export": 1, "print": 1,
+   "read": 1, "report": 1, "role": "System Manager", "share": 1,
+   "write": 1, "submit": 1, "cancel": 1, "amend": 1
   },
   {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "Cafe Manager",
-   "share": 1,
-   "write": 1
+   "create": 1, "delete": 1, "email": 1, "export": 1, "print": 1,
+   "read": 1, "report": 1, "role": "Cafe Manager", "share": 1,
+   "write": 1, "submit": 1, "cancel": 1, "amend": 1
   }
  ],
  "sort_field": "modified",
