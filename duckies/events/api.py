@@ -156,8 +156,16 @@ def _refund_booking_to_wallet(booking):
 
 def _make_credit_note(invoice_name):
     """Create + submit a return Sales Invoice (Credit Note) against the
-    original. Non-fatal: logged if it fails, since the wallet refund — the
-    customer-facing part — has already succeeded."""
+    original, settled immediately through the Wallet account so it doesn't
+    leave a dangling negative outstanding.
+
+    Because the customer's money went back to their WALLET (not their bank),
+    the return is paid via the Wallet mode of payment: this posts
+    Dr Revenue-reversal / Cr Wallet Liability, i.e. the amount returns to
+    "money we owe on wallets" — which is exactly where it now sits.
+
+    Non-fatal: logged if it fails, since the wallet refund (the customer-facing
+    part) has already succeeded."""
     try:
         si = frappe.get_doc("Sales Invoice", invoice_name)
         if si.docstatus != 1:
@@ -166,6 +174,8 @@ def _make_credit_note(invoice_name):
         if frappe.db.exists("Sales Invoice",
                             {"return_against": invoice_name, "docstatus": 1}):
             return
+
+        settings = frappe.get_cached_doc("Duckies Settings")
         cn = frappe.get_doc({
             "doctype": "Sales Invoice",
             "customer": si.customer,
@@ -185,6 +195,16 @@ def _make_credit_note(invoice_name):
         cn.flags.ignore_permissions = True
         cn.set_missing_values()
         cn.calculate_taxes_and_totals()
+
+        # Settle immediately through the Wallet account. For a return, the
+        # payment is negative (money going back to the customer's wallet).
+        if settings.wallet_liability_account:
+            cn.is_pos = 1
+            cn.append("payments", {
+                "mode_of_payment": "Wallet",
+                "account": settings.wallet_liability_account,
+                "amount": cn.grand_total,  # negative for a return
+            })
         cn.insert()
         cn.submit()
     except Exception:

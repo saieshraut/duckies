@@ -90,6 +90,17 @@ def run():
     cancel_booking(cust.name, bkg.name)
     _show(cust.name, "after cancel+refund")
 
+    # Verify the credit note was created AND settled (no dangling outstanding)
+    cn = frappe.get_all("Sales Invoice",
+        filters={"return_against": bkg.sales_invoice, "docstatus": 1},
+        fields=["name", "grand_total", "outstanding_amount", "status"])
+    if cn:
+        c = cn[0]
+        print(f"  credit note: {c.name}  total={c.grand_total}  "
+              f"outstanding={c.outstanding_amount}  status={c.status}")
+    else:
+        print("  credit note: NONE created (check Error Log)")
+
     print("\n=== 7. Final ledger ===")
     _ledger(cust.name)
 

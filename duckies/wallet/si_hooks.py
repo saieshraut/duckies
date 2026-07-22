@@ -48,6 +48,12 @@ def _pos_wallet_amount(doc) -> float:
 def validate_wallet_payment(doc, method=None):
     settings = frappe.get_cached_doc("Duckies Settings")
 
+    # Return invoices (credit notes) settle the wallet refund on the accounting
+    # side only — the customer's wallet was already credited by cancel_booking.
+    # Skip the balance check and the debit hook entirely for them.
+    if doc.get("is_return"):
+        return
+
     if doc.is_pos and settings.enforce_wallet_only:
         for p in (doc.get("payments") or []):
             if flt(p.amount) and p.mode_of_payment != WALLET_MODE:
@@ -81,6 +87,10 @@ def debit_wallet_on_submit(doc, method=None):
     """Debit the wallet ledger when a wallet customer's invoice is submitted.
     Idempotent via has_txn_for_reference, so it fires exactly once whether the
     invoice came from make_wallet_invoice or the interactive POS screen."""
+    # Never touch the wallet ledger for return invoices — the refund was
+    # already posted by cancel_booking; this credit note is books-only.
+    if doc.get("is_return"):
+        return
     amt = doc.grand_total if _is_wallet_customer(doc.customer) else _pos_wallet_amount(doc)
     if not amt:
         return
