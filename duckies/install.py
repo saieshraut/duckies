@@ -323,13 +323,21 @@ def setup_tax_templates(company: str):
         acc.insert()
         return acc.name
 
-    def item_tax_template(title, entries):
+    def item_tax_template(title, entries, gst_treatment="Taxable"):
+        full = f"{title} - {abbr}"
         if frappe.db.exists("Item Tax Template", {"title": title, "company": company}):
-            return f"{title} - {abbr}"
-        doc = frappe.get_doc({
+            return full
+        payload = {
             "doctype": "Item Tax Template", "title": title, "company": company,
             "taxes": [{"tax_type": acc, "tax_rate": rate} for acc, rate in entries],
-        })
+        }
+        # india_compliance adds a GST Treatment field. Alcohol is outside GST
+        # (Non-GST) and must carry NO tax rows — a 0% taxable row is rejected.
+        if frappe.get_meta("Item Tax Template").has_field("gst_treatment"):
+            payload["gst_treatment"] = gst_treatment
+            if gst_treatment != "Taxable":
+                payload["taxes"] = []
+        doc = frappe.get_doc(payload)
         doc.flags.ignore_permissions = True
         doc.insert()
         return doc.name
@@ -342,9 +350,11 @@ def setup_tax_templates(company: str):
         templates[label] = item_tax_template(
             f"GST {label}%", [(cgst, rate / 2), (sgst, rate / 2)])
 
-    # Goa VAT for liquor — rate 0 as a placeholder; set per your excise/VAT advice
-    vat_acc = tax_account("Output VAT (Liquor)", 0.0)
-    templates["vat"] = item_tax_template("Goa VAT - Liquor", [(vat_acc, 0.0)])
+    # Liquor is Non-GST (outside GST). No GST tax rows. Goa VAT is handled
+    # separately as a Sales Taxes and Charges template, NOT here — GST-tax
+    # accounts and VAT don't mix on one Item Tax Template under india_compliance.
+    templates["liquor"] = item_tax_template(
+        "Liquor (Non-GST)", [], gst_treatment="Non-GST")
 
     # Attach templates to item groups
     def attach(group, template):
@@ -359,8 +369,10 @@ def setup_tax_templates(company: str):
     attach("Events", templates["18"])
     attach("Food", templates["5"])
     attach("Non-Alcoholic", templates["5"])
-    attach("Cocktails", templates["vat"])
-    attach("Spirits", templates["vat"])
+    attach("Cocktails", templates["liquor"])
+    attach("Spirits", templates["liquor"])
     frappe.db.commit()
     return {"templates": templates,
-            "note": "Confirm all rates and the Goa VAT rate with your CA."}
+            "note": "Liquor is set Non-GST. Goa VAT is a separate Sales Taxes "
+                    "and Charges Template applied at billing — set it up with "
+                    "your CA. Confirm all GST rates too."}
