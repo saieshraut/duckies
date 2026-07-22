@@ -182,8 +182,12 @@ def get_applicable_bonus(amount: float):
 
 
 def apply_recharge(customer, amount, ref_dt=None, ref_dn=None, remarks=None):
-    """Credit Cash bucket + any Bonus bucket. Returns (cash_txn, bonus_txn|None,
-    bonus_amount)."""
+    """Credit Cash bucket + any Bonus bucket, AND post the accounting Journal
+    Entry. This is the single recharge entry point — every path (Razorpay
+    webhook, offline front-desk, direct call) goes through here, so the books
+    are always in sync with the wallet ledger.
+
+    Returns (cash_txn, bonus_txn|None, bonus_amount)."""
     cash_txn = credit(customer, amount, "Recharge", "Cash",
                       ref_dt, ref_dn, remarks)
     bonus, offer = get_applicable_bonus(amount)
@@ -191,7 +195,58 @@ def apply_recharge(customer, amount, ref_dt=None, ref_dn=None, remarks=None):
     if bonus > 0:
         bonus_txn = credit(customer, bonus, "Bonus", "Bonus", ref_dt, ref_dn,
                            _("Recharge offer: {0}").format(offer))
-    return cash_txn, bonus_txn, bonus
+
+    # Accounting: Dr Bank/Razorpay + Dr Promo Expense / Cr Wallet Liability.
+    je_name = post_recharge_accounting(customer, flt(amount), flt(bonus),
+                                       ref_dt, ref_dn)
+    return cash_txn, bonus_txn, bonus, je_name
+
+
+def post_recharge_accounting(customer, amount, bonus, ref_dt=None, ref_dn=None):
+    """Dr Bank/Razorpay (cash) + Dr Promo Expense (bonus) / Cr Wallet
+    Liability. Non-fatal: a misconfigured account is logged, never blocks the
+    customer's wallet credit — accounts can repost from the Error Log.
+
+    Returns the Journal Entry name, or None if skipped/failed."""
+    s = frappe.get_cached_doc("Duckies Settings")
+    ref = f"{ref_dt} {ref_dn}".strip() if ref_dt else customer
+
+    if not (s.company and s.wallet_liability_account and s.deposit_account):
+        frappe.log_error(
+            title=f"Recharge accounting skipped ({customer})",
+            message="Set company / wallet_liability_account / deposit_account "
+                    "in Duckies Settings, then post the JE manually.")
+        return None
+    try:
+        accounts = [
+            {"account": s.deposit_account,
+             "debit_in_account_currency": flt(amount)},
+            {"account": s.wallet_liability_account,
+             "credit_in_account_currency": flt(amount)},
+        ]
+        if bonus > 0 and s.promo_expense_account:
+            accounts += [
+                {"account": s.promo_expense_account,
+                 "debit_in_account_currency": flt(bonus)},
+                {"account": s.wallet_liability_account,
+                 "credit_in_account_currency": flt(bonus)},
+            ]
+        je = frappe.get_doc({
+            "doctype": "Journal Entry",
+            "company": s.company,
+            "posting_date": frappe.utils.today(),
+            "user_remark": _("Wallet recharge for {0} (ref: {1})").format(
+                customer, ref),
+            "accounts": accounts,
+        })
+        je.flags.ignore_permissions = True
+        je.insert()
+        je.submit()
+        return je.name
+    except Exception:
+        frappe.log_error(title=f"Recharge JE failed ({customer})",
+                         message=frappe.get_traceback())
+        return None
 
 
 # --------------------------------------------------------------------------

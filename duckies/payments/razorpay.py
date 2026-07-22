@@ -146,7 +146,7 @@ def settle_recharge_request(req_name: str, payment_id: str | None = None,
     if req.status == "Paid":
         return req  # webhook retry — already settled
 
-    txn, bonus_txn, bonus = apply_recharge(
+    txn, bonus_txn, bonus, je_name = apply_recharge(
         req.customer, req.amount,
         "Recharge Request", req.name,
         remarks or _("Wallet recharge via {0}").format(req.channel),
@@ -159,49 +159,10 @@ def settle_recharge_request(req_name: str, payment_id: str | None = None,
     req.db_set("bonus_amount", bonus)
     if bonus_txn:
         req.db_set("bonus_wallet_transaction", bonus_txn.name)
-
-    _post_recharge_accounting(req, bonus)
+    if je_name:
+        req.db_set("journal_entry", je_name)
+    # Accounting is posted inside apply_recharge now — no separate call here.
     return req
-
-
-def _post_recharge_accounting(req, bonus: float):
-    """Dr Bank/Razorpay, Cr Wallet Liability (cash portion); Dr Promo Expense,
-    Cr Wallet Liability (bonus portion). Failure is logged, never blocks the
-    customer's credit — accounts can repost from the log."""
-    s = _settings()
-    if not (s.company and s.wallet_liability_account and s.deposit_account):
-        frappe.log_error(
-            title=f"Recharge accounting skipped for {req.name}",
-            message="Configure company/accounts in Duckies Settings, then post a JE manually.",
-        )
-        return
-    try:
-        accounts = [
-            {"account": s.deposit_account, "debit_in_account_currency": flt(req.amount)},
-            {"account": s.wallet_liability_account,
-             "credit_in_account_currency": flt(req.amount)},
-        ]
-        if bonus > 0 and s.promo_expense_account:
-            accounts += [
-                {"account": s.promo_expense_account,
-                 "debit_in_account_currency": flt(bonus)},
-                {"account": s.wallet_liability_account,
-                 "credit_in_account_currency": flt(bonus)},
-            ]
-        je = frappe.get_doc({
-            "doctype": "Journal Entry",
-            "company": s.company,
-            "posting_date": frappe.utils.today(),
-            "user_remark": f"Wallet recharge {req.name} ({req.customer})",
-            "accounts": accounts,
-        })
-        je.flags.ignore_permissions = True
-        je.insert()
-        je.submit()
-        req.db_set("journal_entry", je.name)
-    except Exception:
-        frappe.log_error(title=f"Recharge JE failed for {req.name}",
-                         message=frappe.get_traceback())
 
 
 # --------------------------------------------------------------------------

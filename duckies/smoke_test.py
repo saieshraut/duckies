@@ -50,49 +50,55 @@ def run():
         print("  offer exists")
 
     print("\n=== 2. Recharge 2000 (expect cash=2000, bonus=500) ===")
-    apply_recharge(cust.name, 2000, remarks="smoke test recharge")
+    result = apply_recharge(cust.name, 2000, remarks="smoke test recharge")
+    je_name = result[3] if len(result) > 3 else None
     _show(cust.name, "after recharge")
+    if je_name:
+        je = frappe.get_doc("Journal Entry", je_name)
+        print(f"  accounting JE: {je_name}  total_debit={je.total_debit} "
+              f"(expect 2500 = 2000 bank + 500 promo)")
+    else:
+        print("  accounting JE: NONE — check Error Log / Duckies Settings accounts")
 
-    # print("\n=== 3. Create a test event today ===")
-    # space = frappe.get_all("Cafe Space", limit=1, pluck="name")[0]
-    # from duckies.events.tasks import get_or_create_event_item
-    # item = get_or_create_event_item("Smoke Test Session")
-    # print("  event item:", item)
-    # ev = frappe.get_doc({
-    #     "doctype": "Cafe Event", "event_name": "Smoke Test Session",
-    #     "space": space, "date": today(), "start_time": "23:59:00",
-    #     "price": 300, "capacity": 10, "status": "Upcoming", "item": item,
-    # }).insert(ignore_permissions=True)
-    # print("  event:", ev.name)
+    print("\n=== 3. Create a test event today ===")
+    space = frappe.get_all("Cafe Space", limit=1, pluck="name")[0]
+    from duckies.events.tasks import get_or_create_event_item
+    item = get_or_create_event_item("Smoke Test Session")
+    print("  event item:", item)
+    ev = frappe.get_doc({
+        "doctype": "Cafe Event", "event_name": "Smoke Test Session",
+        "space": space, "date": today(), "start_time": "23:59:00",
+        "price": 300, "capacity": 10, "status": "Upcoming", "item": item,
+    }).insert(ignore_permissions=True)
+    print("  event:", ev.name)
 
-    # print("\n=== 4. Book 2 seats (expect 600: bonus 500 then cash 100) ===")
-    # from duckies.events.api import book_event
-    # bkg = book_event(cust.name, ev.name, 2)
-    # _show(cust.name, "after booking")
-    # print("  booking:", bkg.name, "| invoice:", bkg.sales_invoice)
+    print("\n=== 4. Book 2 seats (expect 600: bonus 500 then cash 100) ===")
+    from duckies.events.api import book_event
+    bkg = book_event(cust.name, ev.name, 2)
+    _show(cust.name, "after booking")
+    print("  booking:", bkg.name, "| invoice:", bkg.sales_invoice)
 
-    # print("\n=== 5. Ledger after booking ===")
-    # _ledger(cust.name)
+    print("\n=== 5. Ledger after booking ===")
+    _ledger(cust.name)
 
-    # print("\n=== 6. Cancel booking (expect 600 refunded to same buckets) ===")
-    # from duckies.events.api import cancel_booking
-    # s = frappe.get_doc("Duckies Settings")
-    # s.cancellation_cutoff_hours = 0
-    # s.flags.ignore_permissions = True
-    # s.save()
-    # cancel_booking(cust.name, bkg.name)
-    # _show(cust.name, "after cancel+refund")
+    print("\n=== 6. Cancel booking (expect 600 refunded to same buckets) ===")
+    from duckies.events.api import cancel_booking
+    s = frappe.get_doc("Duckies Settings")
+    s.cancellation_cutoff_hours = 0
+    s.flags.ignore_permissions = True
+    s.save()
+    cancel_booking(cust.name, bkg.name)
+    _show(cust.name, "after cancel+refund")
 
-    # print("\n=== 7. Final ledger ===")
-    # _ledger(cust.name)
+    print("\n=== 7. Final ledger ===")
+    _ledger(cust.name)
 
-    # cash, bonus = get_buckets(cust.name)
-    # ok = (cash == 2000 and bonus == 500)
-    # print("\n=== RESULT ===")
-    # print(f"  buckets restored to cash=2000 bonus=500 ? "
-    #       f"{'PASS' if ok else 'CHECK: ' + str((cash, bonus))}")
-    # print(f"  test customer: {cust.name}")
+    cash, bonus = get_buckets(cust.name)
+    ok = (cash == 2000 and bonus == 500)
+    print("\n=== RESULT ===")
+    print(f"  buckets restored to cash=2000 bonus=500 ? "
+          f"{'PASS' if ok else 'CHECK: ' + str((cash, bonus))}")
+    print(f"  test customer: {cust.name}")
 
-    # frappe.db.commit()
-    # return {"customer": cust.name, "cash": cash, "bonus": bonus, "pass": ok}
-    return "OK"
+    frappe.db.commit()
+    return {"customer": cust.name, "cash": cash, "bonus": bonus, "pass": ok}
