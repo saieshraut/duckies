@@ -1,5 +1,4 @@
 # Copyright (c) 2026, Duckie's Sports Cafe
-# For license information, please see license.txt
 
 import frappe
 from frappe import _
@@ -13,5 +12,5 @@ class WalletTransaction(Document):
             self.posting_datetime = now_datetime()
 
     def on_cancel(self):
-        frappe.throw(_("Wallet Transactions are an immutable ledger and cannot be cancelled. "
-                       "Post an Adjustment or Refund instead."))
+        frappe.throw(_("Wallet Transactions are an immutable ledger and cannot "
+                       "be cancelled. Post an Adjustment or Refund instead."))

@@ -25,6 +25,8 @@ doc_events = {
 scheduler_events = {
     "daily": [
         "duckies.events.tasks.generate_upcoming_events",
+        "duckies.wallet.expiry.send_expiry_reminders",
+        "duckies.wallet.expiry.expire_lapsed_wallets",
     ],
     "hourly": [
         "duckies.events.tasks.update_event_statuses",

@@ -13,7 +13,7 @@ from frappe import _
 from frappe.utils import flt
 
 from duckies.wallet.api import (
-    create_wallet_txn, get_balance, has_txn_for_reference, lock_customer,
+    credit, debit, get_balance, has_txn_for_reference, lock_customer,
 )
 
 WALLET_MODE = "Wallet"
@@ -61,14 +61,16 @@ def debit_wallet_on_submit(doc, method=None):
         return
     if has_txn_for_reference(doc.customer, "Debit", "Sales Invoice", doc.name):
         return  # idempotent
-    create_wallet_txn(
-        doc.customer, amt, "Spend", "Debit",
+    debit(
+        doc.customer, amt, "Spend",
         "Sales Invoice", doc.name,
         remarks=_("Invoice {0}").format(doc.name),
     )
 
 
 def refund_wallet_on_cancel(doc, method=None):
+    """Return the money to the same buckets it was spent from, so a cancelled
+    bonus-funded booking refunds bonus (not cash) and stays non-refundable."""
     amt = _wallet_amount(doc)
     if not amt:
         return
@@ -76,11 +78,24 @@ def refund_wallet_on_cancel(doc, method=None):
         return  # was never debited
     if has_txn_for_reference(doc.customer, "Credit", "Sales Invoice", doc.name):
         return  # already refunded
-    create_wallet_txn(
-        doc.customer, amt, "Refund", "Credit",
-        "Sales Invoice", doc.name,
-        remarks=_("Refund for cancelled invoice {0}").format(doc.name),
-    )
+
+    # Reconstruct per-bucket amounts from the original debit rows.
+    rows = frappe.get_all(
+        "Wallet Transaction",
+        filters={"customer": doc.customer, "direction": "Debit", "docstatus": 1,
+                 "reference_doctype": "Sales Invoice", "reference_name": doc.name},
+        fields=["bucket", "amount"])
+    per_bucket = {"Cash": 0.0, "Bonus": 0.0}
+    for r in rows:
+        per_bucket[r.bucket] = per_bucket.get(r.bucket, 0.0) + flt(r.amount)
+
+    for bucket, bamt in per_bucket.items():
+        if bamt > 0:
+            credit(
+                doc.customer, bamt, "Refund", bucket,
+                "Sales Invoice", doc.name,
+                remarks=_("Refund for cancelled invoice {0}").format(doc.name),
+            )
 
 
 # --------------------------------------------------------------------------

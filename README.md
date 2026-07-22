@@ -4,7 +4,13 @@ Custom Frappe app powering **Duckie's Sports Cafe**: a strictly prepaid,
 wallet-only cafe with bookable spaces, recurring events, food & drinks via
 ERPNext POS, recharge offers, and a JSON API ready for a customer web app.
 
-Built for **Frappe / ERPNext v15**.
+Built for **Frappe / ERPNext v15/v16**.
+
+> **India compliance (v2):** the wallet is a closed-system PPI with a
+> cash/bonus bucket split, wallet expiry + breakage, refund-to-source, GST/VAT
+> config, and DPDP consent/erasure. The legal basis for each design choice is
+> in **[COMPLIANCE.md](./COMPLIANCE.md)** — read it with your CA and lawyer;
+> confirm all rates and thresholds before go-live.
 
 ---
 
@@ -53,7 +59,7 @@ bench --site yoursite.local clear-cache
 ## 2. One-time setup after the ERPNext wizard
 
 1. Complete the ERPNext **setup wizard** (creates your Company, chart of accounts, tax templates).
-2. Wire the accounts (creates Wallet Liability + Promo Expense, links the Wallet mode of payment):
+2. Wire the accounts. This creates the Wallet Liability, Promo Expense and Breakage Income accounts, links the Wallet mode of payment, and — via `setup_tax_templates`, which it now calls automatically — creates the 18% / 5% GST and Goa VAT item-tax templates and attaches them to the right item groups:
 
 ```bash
 bench --site yoursite.local console
@@ -61,8 +67,13 @@ bench --site yoursite.local console
 >>> setup_accounts("Your Company Name")
 ```
 
+   The Goa VAT (liquor) template is created at **rate 0** on purpose — set the real rate once your excise/VAT position is confirmed, then re-run `setup_tax_templates("Your Company Name")` or edit the template in the desk.
+
 3. Open **Duckies Settings** in the desk and confirm/set:
    - `deposit_account` — the bank account Razorpay settles into
+   - `breakage_income_account` — auto-set, confirm it
+   - `wallet_validity_months` (default 12), `expiry_reminder_days` (default `30,7`), `allow_self_refund`
+   - `liquor_invoice_naming_series` if your CA wants a separate VAT bill series
    - Razorpay `key_id`, `key_secret`, `webhook_secret`
 4. In the **Razorpay dashboard** add a webhook:
    - URL: `https://<your-site>/api/method/duckies.payments.razorpay.webhook`
@@ -89,7 +100,7 @@ Responses are wrapped by Frappe as `{"message": <return value>}`.
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `duckies.api.register` | guest | `full_name, email, mobile, password` → creates User+Customer, logs in |
+| `duckies.api.register` | guest | `full_name, email, mobile, password, consent` → creates User+Customer, logs in. **`consent` (1) is mandatory** (DPDP) |
 | `/api/method/login` | guest | Frappe built-in: `usr`, `pwd` |
 | `/api/method/logout` | session | Frappe built-in |
 | `duckies.api.get_profile` | session | name, mobile, wallet balance |
@@ -102,8 +113,14 @@ Responses are wrapped by Frappe as `{"message": <return value>}`.
 | `duckies.api.cancel_booking` | session | `booking` → refund if before cutoff |
 | `duckies.api.my_bookings` | session | booking history |
 | `duckies.api.menu` | guest | items grouped by Item Group |
-| `duckies.api.place_order` | session | `items=[{item_code, qty}]` → wallet-paid invoice |
+| `duckies.api.place_order` | session | `items=[{item_code, qty}]` → wallet-paid invoice. Blocks age-restricted (alcohol) items |
+| `duckies.api.request_refund` | session | `amount, reason` → refund request for unused **cash** (bonus is non-refundable) |
+| `duckies.api.add_family_member` | session | `full_name, is_minor` → guardian-linked profile paid from your wallet |
+| `duckies.api.delete_my_account` | session | DPDP erasure: anonymises personal data, keeps financial records |
+| `duckies.payments.razorpay.process_refund` | staff | `refund_request` → wallet debit + Razorpay refund-to-source + reversal JE |
 | `duckies.payments.razorpay.create_recharge_order` | session | `amount` → Razorpay order for Checkout |
+
+`balance`, `get_profile`, `transactions` and the order/booking responses now return `cash_balance` and `bonus_balance` separately (plus `wallet_expiry` on the profile), so the app can show the two buckets and the expiry date.
 
 ### Frontend recharge flow (vanilla JS, works the same in Vue/React)
 

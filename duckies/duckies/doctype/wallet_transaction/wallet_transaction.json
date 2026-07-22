@@ -11,7 +11,10 @@
   "posting_datetime",
   "transaction_type",
   "direction",
+  "bucket",
   "amount",
+  "cash_balance_after",
+  "bonus_balance_after",
   "balance_after",
   "reference_doctype",
   "reference_name",
@@ -40,7 +43,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Transaction Type",
-   "options": "Recharge\nBonus\nSpend\nRefund\nAdjustment",
+   "options": "Recharge\nBonus\nSpend\nRefund\nAdjustment\nExpiry",
    "reqd": 1
   },
   {
@@ -52,6 +55,16 @@
    "reqd": 1
   },
   {
+   "default": "Cash",
+   "description": "Cash = refundable money loaded by the customer; Bonus = promotional credit, non-refundable",
+   "fieldname": "bucket",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Bucket",
+   "options": "Cash\nBonus",
+   "reqd": 1
+  },
+  {
    "fieldname": "amount",
    "fieldtype": "Currency",
    "in_list_view": 1,
@@ -59,10 +72,22 @@
    "reqd": 1
   },
   {
+   "fieldname": "cash_balance_after",
+   "fieldtype": "Currency",
+   "label": "Cash Balance After",
+   "read_only": 1
+  },
+  {
+   "fieldname": "bonus_balance_after",
+   "fieldtype": "Currency",
+   "label": "Bonus Balance After",
+   "read_only": 1
+  },
+  {
    "fieldname": "balance_after",
    "fieldtype": "Currency",
    "in_list_view": 1,
-   "label": "Balance After",
+   "label": "Total Balance After",
    "read_only": 1
   },
   {
@@ -104,8 +129,6 @@
  "owner": "Administrator",
  "permissions": [
   {
-   "amend": 0,
-   "cancel": 0,
    "create": 1,
    "delete": 1,
    "email": 1,
@@ -119,8 +142,6 @@
    "write": 1
   },
   {
-   "amend": 0,
-   "cancel": 0,
    "create": 1,
    "delete": 1,
    "email": 1,

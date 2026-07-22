@@ -202,3 +202,91 @@ def _post_recharge_accounting(req, bonus: float):
     except Exception:
         frappe.log_error(title=f"Recharge JE failed for {req.name}",
                          message=frappe.get_traceback())
+
+
+# --------------------------------------------------------------------------
+# Refund of unused CASH balance to the original payment source
+# --------------------------------------------------------------------------
+
+@frappe.whitelist()
+def process_refund(refund_request: str):
+    """Staff-approved refund of refundable cash balance.
+
+    Flow: validate against cash bucket -> debit wallet (Cash) -> Razorpay
+    refund against the original payment -> reversal Journal Entry
+    (Dr Wallet Liability / Cr Bank). Bonus credit is never refundable, so
+    only the Cash bucket is ever touched.
+    """
+    frappe.only_for(("System Manager", "Cafe Manager"))
+    from duckies.wallet.api import debit, get_buckets
+
+    req = frappe.get_doc("Wallet Refund Request", refund_request, for_update=True)
+    if req.status == "Processed":
+        return {"message": _("Already processed."), "refund": req.name}
+    if req.docstatus != 1:
+        frappe.throw(_("Approve (submit) the refund request first."))
+
+    amount = flt(req.amount)
+    cash, _bonus = get_buckets(req.customer)
+    if amount > cash + 0.005:
+        frappe.throw(_("Refund exceeds refundable cash balance ({0}). "
+                       "Bonus credit is not refundable.").format(cash))
+
+    # 1. Take the money out of the wallet (Cash bucket) first.
+    txns = debit(req.customer, amount, "Refund",
+                 "Wallet Refund Request", req.name,
+                 remarks=req.reason or _("Wallet refund"))
+    req.db_set("wallet_transaction", txns[-1].name)
+
+    # 2. Reverse to source via Razorpay (if an online recharge is referenced).
+    if req.refund_to == "Original Payment Source" and req.original_recharge:
+        payment_id = frappe.db.get_value(
+            "Recharge Request", req.original_recharge, "razorpay_payment_id")
+        if payment_id:
+            resp = requests.post(
+                f"{RAZORPAY_API}/payments/{payment_id}/refund",
+                auth=_auth(),
+                json={"amount": int(round(amount * 100)),
+                      "notes": {"refund_request": req.name}},
+                timeout=20)
+            if resp.status_code not in (200, 202):
+                frappe.log_error(title=f"Razorpay refund failed {req.name}",
+                                 message=resp.text)
+                frappe.throw(_("Razorpay refund failed. The wallet debit has "
+                               "been rolled back; please retry."))
+            req.db_set("razorpay_refund_id", resp.json().get("id"))
+
+    # 3. Accounting reversal: Dr Wallet Liability / Cr Bank.
+    _post_refund_accounting(req, amount)
+
+    req.db_set("status", "Processed")
+    req.db_set("processed_on", frappe.utils.now_datetime())
+    return {"message": _("Refund processed."), "refund": req.name,
+            "razorpay_refund_id": req.razorpay_refund_id}
+
+
+def _post_refund_accounting(req, amount: float):
+    s = _settings()
+    if not (s.company and s.wallet_liability_account and s.deposit_account):
+        frappe.log_error(title=f"Refund accounting skipped {req.name}",
+                         message="Configure accounts in Duckies Settings.")
+        return
+    try:
+        je = frappe.get_doc({
+            "doctype": "Journal Entry", "company": s.company,
+            "posting_date": frappe.utils.today(),
+            "user_remark": f"Wallet refund {req.name} ({req.customer})",
+            "accounts": [
+                {"account": s.wallet_liability_account,
+                 "debit_in_account_currency": flt(amount)},
+                {"account": s.deposit_account,
+                 "credit_in_account_currency": flt(amount)},
+            ],
+        })
+        je.flags.ignore_permissions = True
+        je.insert()
+        je.submit()
+        req.db_set("journal_entry", je.name)
+    except Exception:
+        frappe.log_error(title=f"Refund JE failed {req.name}",
+                         message=frappe.get_traceback())

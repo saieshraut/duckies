@@ -11,10 +11,17 @@
   "wallet_liability_account",
   "deposit_account",
   "promo_expense_account",
+  "breakage_income_account",
+  "cb_acc",
+  "liquor_invoice_naming_series",
   "sb_wallet",
   "enforce_wallet_only",
   "min_recharge_amount",
   "cancellation_cutoff_hours",
+  "cb_wallet",
+  "wallet_validity_months",
+  "expiry_reminder_days",
+  "allow_self_refund",
   "sb_menu",
   "menu_root_item_group",
   "sb_rzp",
@@ -35,7 +42,7 @@
    "options": "Company"
   },
   {
-   "description": "Current liability account holding unspent wallet balances",
+   "description": "Current liability holding unspent wallet balances",
    "fieldname": "wallet_liability_account",
    "fieldtype": "Link",
    "label": "Wallet Liability Account",
@@ -49,11 +56,29 @@
    "options": "Account"
   },
   {
-   "description": "Expense account debited for recharge bonuses",
+   "description": "Expense debited for recharge bonuses",
    "fieldname": "promo_expense_account",
    "fieldtype": "Link",
    "label": "Promo Expense Account",
    "options": "Account"
+  },
+  {
+   "description": "Income credited when expired balances are written back",
+   "fieldname": "breakage_income_account",
+   "fieldtype": "Link",
+   "label": "Breakage Income Account",
+   "options": "Account"
+  },
+  {
+   "fieldname": "cb_acc",
+   "fieldtype": "Column Break",
+   "label": "Cb Acc"
+  },
+  {
+   "description": "Optional separate naming series for liquor (VAT) bills, e.g. LIQ-.YYYY.-",
+   "fieldname": "liquor_invoice_naming_series",
+   "fieldtype": "Data",
+   "label": "Liquor Invoice Naming Series"
   },
   {
    "fieldname": "sb_wallet",
@@ -62,7 +87,7 @@
   },
   {
    "default": "1",
-   "description": "Block POS invoices paid by anything other than the Wallet",
+   "description": "Block POS invoices paid by anything other than Wallet",
    "fieldname": "enforce_wallet_only",
    "fieldtype": "Check",
    "label": "Enforce Wallet Only"
@@ -75,10 +100,35 @@
   },
   {
    "default": "4",
-   "description": "Bookings can be cancelled for a full refund up to this many hours before the event",
    "fieldname": "cancellation_cutoff_hours",
    "fieldtype": "Int",
    "label": "Cancellation Cutoff Hours"
+  },
+  {
+   "fieldname": "cb_wallet",
+   "fieldtype": "Column Break",
+   "label": "Cb Wallet"
+  },
+  {
+   "default": "12",
+   "description": "Wallet expires this many months after the last activity",
+   "fieldname": "wallet_validity_months",
+   "fieldtype": "Int",
+   "label": "Wallet Validity Months"
+  },
+  {
+   "default": "30,7",
+   "description": "Comma-separated days-before-expiry to send reminders",
+   "fieldname": "expiry_reminder_days",
+   "fieldtype": "Data",
+   "label": "Expiry Reminder Days"
+  },
+  {
+   "default": "1",
+   "description": "Let customers raise refund requests from the web app",
+   "fieldname": "allow_self_refund",
+   "fieldtype": "Check",
+   "label": "Allow Self Refund"
   },
   {
    "fieldname": "sb_menu",
@@ -86,7 +136,6 @@
    "label": "Menu"
   },
   {
-   "description": "Web app shows saleable items under this group",
    "fieldname": "menu_root_item_group",
    "fieldtype": "Link",
    "label": "Menu Root Item Group",
