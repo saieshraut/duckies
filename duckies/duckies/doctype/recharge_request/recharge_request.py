@@ -47,10 +47,22 @@ class RechargeRequest(Document):
             remark += f" / ref {self.payment_reference}"
         remark += ")"
 
+        # Translate the staff's offer choice into the apply_recharge param:
+        #   Auto (best offer) -> None  (auto-pick)
+        #   Choose offer      -> the selected offer name
+        #   No bonus          -> "none" (suppress)
+        if self.offer_mode == "No bonus":
+            offer_arg = "none"
+        elif self.offer_mode == "Choose offer":
+            offer_arg = self.offer
+        else:
+            offer_arg = None
+
         cash_txn, bonus_txn, bonus, je_name = apply_recharge(
             self.customer, flt(self.amount),
             "Recharge Request", self.name, remark,
             deposit_account=self.payment_account,
+            offer=offer_arg,
         )
 
         self.db_set("status", "Paid")
@@ -74,3 +86,19 @@ class RechargeRequest(Document):
             "A completed recharge cannot be cancelled — it would leave the "
             "customer's wallet out of balance. Use a Wallet Refund Request "
             "or a manual Adjustment instead."))
+
+
+@frappe.whitelist()
+def get_bonus_preview(amount, offer_mode="Auto (best offer)", offer=None):
+    """Live preview of the bonus for the current amount + offer choice.
+    Returns {bonus, offer_label}."""
+    from duckies.wallet.api import resolve_offer
+    amount = flt(amount)
+    if offer_mode == "No bonus":
+        arg = "none"
+    elif offer_mode == "Choose offer":
+        arg = offer
+    else:
+        arg = None
+    bonus, label = resolve_offer(arg, amount)
+    return {"bonus": bonus, "offer_label": label}

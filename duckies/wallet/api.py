@@ -181,8 +181,43 @@ def get_applicable_bonus(amount: float):
     return best, best_offer
 
 
+def compute_offer_bonus(offer_name: str, amount: float) -> float:
+    """Bonus for a specific named offer at this amount, honouring its min and
+    validity. Returns 0 if the offer doesn't qualify."""
+    amount = flt(amount)
+    o = frappe.db.get_value(
+        "Recharge Offer", offer_name,
+        ["is_active", "min_recharge_amount", "bonus_type", "bonus_amount",
+         "bonus_percent", "valid_from", "valid_to"], as_dict=True)
+    if not o or not o.is_active:
+        return 0.0
+    if amount < flt(o.min_recharge_amount):
+        return 0.0
+    today = frappe.utils.today()
+    if o.valid_from and str(o.valid_from) > today:
+        return 0.0
+    if o.valid_to and str(o.valid_to) < today:
+        return 0.0
+    return (flt(o.bonus_amount) if o.bonus_type == "Fixed Amount"
+            else amount * flt(o.bonus_percent) / 100.0)
+
+
+def resolve_offer(offer, amount):
+    """Given the caller's offer choice, return (bonus_amount, offer_label).
+
+    offer = None      -> auto: pick the best matching active offer
+    offer = "none"    -> suppress: no bonus (manager override)
+    offer = "<name>"  -> use that specific offer (0 bonus if it doesn't qualify)
+    """
+    if offer is None:
+        return get_applicable_bonus(amount)
+    if str(offer).lower() == "none":
+        return 0.0, None
+    return compute_offer_bonus(offer, amount), offer
+
+
 def apply_recharge(customer, amount, ref_dt=None, ref_dn=None, remarks=None,
-                   deposit_account=None):
+                   deposit_account=None, offer=None):
     """Credit Cash bucket + any Bonus bucket, AND post the accounting Journal
     Entry. This is the single recharge entry point — every path (Razorpay
     webhook, offline front-desk, direct call) goes through here, so the books
@@ -191,14 +226,17 @@ def apply_recharge(customer, amount, ref_dt=None, ref_dn=None, remarks=None,
     ``deposit_account`` overrides the default deposit account (e.g. front-desk
     Cash-in-hand vs bank vs UPI settlement). Falls back to Duckies Settings.
 
+    ``offer`` controls the bonus: None = auto-pick best matching offer;
+    "none" = no bonus (override); an offer name = use that specific offer.
+
     Returns (cash_txn, bonus_txn|None, bonus_amount, journal_entry_name)."""
     cash_txn = credit(customer, amount, "Recharge", "Cash",
                       ref_dt, ref_dn, remarks)
-    bonus, offer = get_applicable_bonus(amount)
+    bonus, offer_label = resolve_offer(offer, amount)
     bonus_txn = None
     if bonus > 0:
         bonus_txn = credit(customer, bonus, "Bonus", "Bonus", ref_dt, ref_dn,
-                           _("Recharge offer: {0}").format(offer))
+                           _("Recharge offer: {0}").format(offer_label))
 
     # Accounting: Dr Bank/Razorpay + Dr Promo Expense / Cr Wallet Liability.
     je_name = post_recharge_accounting(customer, flt(amount), flt(bonus),

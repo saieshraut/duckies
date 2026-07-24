@@ -4,6 +4,9 @@ frappe.ui.form.on("Recharge Request", {
         if (frm.is_new() && !frm.doc.channel) {
             frm.set_value("channel", "Offline");
         }
+        if (frm.is_new() && !frm.doc.offer_mode) {
+            frm.set_value("offer_mode", "Auto (best offer)");
+        }
     },
 
     customer(frm) {
@@ -12,7 +15,6 @@ frappe.ui.form.on("Recharge Request", {
             ["custom_wallet_balance", "custom_wallet_cash", "custom_wallet_bonus"])
             .then(r => {
                 const d = r.message || {};
-                frm.dashboard.clear_headline();
                 frm.dashboard.set_headline(
                     __("Current wallet balance: {0} (cash {1} + bonus {2})", [
                         format_currency(d.custom_wallet_balance || 0),
@@ -22,6 +24,10 @@ frappe.ui.form.on("Recharge Request", {
                 );
             });
     },
+
+    amount(frm) { preview_bonus(frm); },
+    offer_mode(frm) { preview_bonus(frm); },
+    offer(frm) { preview_bonus(frm); },
 
     refresh(frm) {
         if (frm.doc.docstatus === 1 && frm.doc.status === "Paid") {
@@ -36,3 +42,28 @@ frappe.ui.form.on("Recharge Request", {
         }
     },
 });
+
+function preview_bonus(frm) {
+    if (frm.doc.docstatus !== 0) return;
+    if (!frm.doc.amount || frm.doc.channel !== "Offline") {
+        frm.set_value("preview_bonus", 0);
+        return;
+    }
+    frappe.call({
+        method: "duckies.duckies.doctype.recharge_request.recharge_request.get_bonus_preview",
+        args: {
+            amount: frm.doc.amount,
+            offer_mode: frm.doc.offer_mode || "Auto (best offer)",
+            offer: frm.doc.offer,
+        },
+        callback(r) {
+            if (!r.message) return;
+            frm.set_value("preview_bonus", r.message.bonus || 0);
+            if (r.message.bonus > 0 && r.message.offer_label) {
+                frm.set_df_property("preview_bonus", "description",
+                    __("Offer: {0}", [r.message.offer_label]));
+                frm.refresh_field("preview_bonus");
+            }
+        },
+    });
+}

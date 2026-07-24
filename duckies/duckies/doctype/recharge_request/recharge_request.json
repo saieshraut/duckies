@@ -16,6 +16,11 @@
   "payment_mode",
   "payment_account",
   "payment_reference",
+  "sb_offer",
+  "offer_mode",
+  "offer",
+  "cb_offer",
+  "preview_bonus",
   "sb_result",
   "status",
   "bonus_amount",
@@ -87,6 +92,39 @@
    "label": "Payment Reference / UTR",
    "depends_on": "eval:doc.channel=='Offline' && doc.payment_mode!='Cash'",
    "description": "UPI ref / card slip / UTR number, for reconciliation"
+  },
+  {
+   "fieldname": "sb_offer",
+   "fieldtype": "Section Break",
+   "label": "Bonus Offer",
+   "depends_on": "eval:doc.channel=='Offline'"
+  },
+  {
+   "default": "Auto (best offer)",
+   "fieldname": "offer_mode",
+   "fieldtype": "Select",
+   "label": "Offer",
+   "options": "Auto (best offer)\nChoose offer\nNo bonus",
+   "description": "Auto = apply the best matching active offer. Choose = pick a specific offer. No bonus = override, load exact amount only."
+  },
+  {
+   "fieldname": "offer",
+   "fieldtype": "Link",
+   "label": "Select Offer",
+   "options": "Recharge Offer",
+   "depends_on": "eval:doc.offer_mode=='Choose offer'",
+   "mandatory_depends_on": "eval:doc.offer_mode=='Choose offer'"
+  },
+  {
+   "fieldname": "cb_offer",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "preview_bonus",
+   "fieldtype": "Currency",
+   "label": "Bonus Preview",
+   "read_only": 1,
+   "description": "Estimated bonus for the chosen offer at this amount"
   },
   {
    "fieldname": "sb_result",
