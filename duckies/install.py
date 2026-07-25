@@ -13,7 +13,14 @@ import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 MENU_ROOT = "From the Kitchen & Bar"
-MENU_CHILDREN = ["Food", "Cocktails", "Spirits", "Non-Alcoholic"]
+MENU_CHILDREN = ["Small Plates", "Cocktails"]
+
+# Sub-category tags per section (the app renders these as filter chips).
+MENU_CATEGORIES = {
+    "Small Plates": ["Veg", "Non-Veg"],
+    "Cocktails": ["Feni", "Urak", "Rum", "Gin", "Tequila", "Vodka",
+                  "Whiskey", "Mocktail"],
+}
 
 SPACES = [
     ("The Dizzy Duck", "Bar at Duckie's",
@@ -157,6 +164,15 @@ def make_custom_fields():
                 "label": "Liquor (VAT, separate bill series)",
                 "insert_after": "custom_age_restricted",
             },
+            {
+                "fieldname": "custom_menu_category",
+                "fieldtype": "Data",
+                "label": "Menu Category",
+                "insert_after": "custom_is_liquor",
+                "description": "Sub-category shown as a filter in the app "
+                               "(Small Plates: Veg/Non-Veg; Cocktails: Feni, "
+                               "Rum, Gin, Mocktail, etc.)",
+            },
         ],
     }, ignore_validate=True)
 
@@ -192,6 +208,19 @@ def make_item_groups():
     for child in MENU_CHILDREN:
         ensure(child, MENU_ROOT)
     ensure("Events", "All Item Groups")
+
+
+@frappe.whitelist()
+def setup_menu_groups():
+    """Idempotently create the Small Plates / Cocktails groups and the Menu
+    Category field on existing installs (run once from bench console after
+    upgrading):  from duckies.install import setup_menu_groups; setup_menu_groups()
+    """
+    frappe.only_for("System Manager")
+    make_item_groups()
+    make_custom_fields()
+    frappe.db.commit()
+    return {"groups": MENU_CHILDREN, "categories": MENU_CATEGORIES}
 
 
 def seed_spaces():

@@ -155,14 +155,25 @@ def _elevated():
     permission check that ignore_permissions does not bypass) as Administrator,
     then restore the original user.
 
-    Safe because the wallet ledger code in the submit chain takes the customer
-    as an explicit argument and never reads session.user."""
-    original = frappe.session.user
+    Bulletproof against being run in a context where the session is torn down
+    or already elevated (e.g. inline background-job execution): it never
+    restores to an invalid user, and only switches when actually needed."""
+    original = getattr(frappe.session, "user", None)
+
+    # If there is no valid original user (background job / torn-down session),
+    # or we are already Administrator, do nothing — just run the block. Jobs
+    # already run with full permissions, so no elevation is needed.
+    if not original or original in ("Administrator", "Guest", None):
+        yield
+        return
+
     frappe.set_user("Administrator")
     try:
         yield
     finally:
-        frappe.set_user(original)
+        # Only restore if we still have a valid original to go back to.
+        if original and original not in ("Administrator", "Guest"):
+            frappe.set_user(original)
 
 
 def make_wallet_invoice(customer, items, remarks=None, skip_wallet_debit=False):

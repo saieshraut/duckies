@@ -66,15 +66,39 @@ onMounted(async () => {
       <section class="mt-5 px-4">
         <h2 class="mb-2 text-sm font-bold text-gray-800">Our spaces</h2>
         <div class="space-y-3">
-          <div v-for="s in spaces" :key="s.name" class="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-gray-100">
-            <div class="flex items-center gap-3 p-4">
-              <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-duck-100 text-xl">🏓</div>
-              <div class="min-w-0">
-                <p class="font-bold text-gray-900">{{ s.space_name }}</p>
-                <p class="truncate text-xs text-gray-500">{{ s.tagline }}</p>
+          <RouterLink
+            v-for="s in spaces"
+            :key="s.name"
+            :to="s.is_bookable ? { name: 'events', query: { space: s.name } } : ''"
+            :class="[
+              'block overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-gray-100',
+              s.is_bookable ? 'active:opacity-90' : 'cursor-default',
+            ]"
+          >
+            <!-- Image banner -->
+            <div class="relative h-36 w-full bg-duck-100">
+              <img
+                v-if="s.image"
+                :src="s.image"
+                :alt="s.space_name"
+                class="h-full w-full object-cover"
+              />
+              <div v-else class="flex h-full w-full items-center justify-center text-4xl">🏓</div>
+              <!-- gradient + title overlay -->
+              <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+              <div class="absolute bottom-0 left-0 right-0 p-3">
+                <p class="text-base font-extrabold text-white drop-shadow">{{ s.space_name }}</p>
+                <p v-if="s.tagline" class="truncate text-xs text-white/90 drop-shadow">{{ s.tagline }}</p>
               </div>
             </div>
-          </div>
+            <!-- Footer row: hint to view events -->
+            <div v-if="s.is_bookable" class="flex items-center justify-between px-4 py-2.5">
+              <span class="text-xs font-medium text-gray-500">View events here</span>
+              <svg class="h-4 w-4 text-duck-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </div>
+          </RouterLink>
         </div>
       </section>
     </template>

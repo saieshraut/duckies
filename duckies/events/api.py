@@ -9,6 +9,7 @@ from frappe.utils import cint, flt, get_datetime, now_datetime
 
 from duckies.events.tasks import get_or_create_event_item
 from duckies.wallet.si_hooks import make_wallet_invoice
+from duckies.wallet.api import debit, credit, get_buckets
 
 
 def _lock_event(event_name: str):
@@ -75,16 +76,27 @@ def book_event(customer: str, event: str, seats: int = 1):
     }).insert(ignore_permissions=True)
 
     # 3. Post accounting (Sales Invoice + settlement) in the background, as
-    #    Administrator. Failure there never affects the confirmed booking or
-    #    the already-correct wallet balance — it's logged and retriable.
-    frappe.enqueue(
+    #    Administrator. Failure or unavailability of the queue never affects the
+    #    confirmed booking or the already-correct wallet balance.
+    _safe_enqueue(
         "duckies.events.api.post_booking_accounting",
-        queue="short",
         booking=booking.name,
-        enqueue_after_commit=True,
     )
 
     return booking
+
+
+def _safe_enqueue(method, **kwargs):
+    """Enqueue a background job, but never let queue problems (no worker, no
+    redis, inline-execution errors) break the customer-facing request. If the
+    job can't be queued, it's logged for later reprocessing."""
+    try:
+        frappe.enqueue(method, queue="short", enqueue_after_commit=True,
+                       **kwargs)
+    except Exception:
+        frappe.log_error(
+            title=f"Could not enqueue {method}",
+            message=frappe.get_traceback() + "\n\nkwargs: " + str(kwargs))
 
 
 def post_booking_accounting(booking: str):
@@ -164,11 +176,9 @@ def cancel_booking(customer: str, booking_name: str):
     # 3. Credit Note for the books, in the background as Administrator
     #    (non-fatal; the customer-facing refund is already done).
     if booking.sales_invoice:
-        frappe.enqueue(
+        _safe_enqueue(
             "duckies.events.api.post_cancellation_accounting",
-            queue="short",
             invoice=booking.sales_invoice,
-            enqueue_after_commit=True,
         )
     return booking
 

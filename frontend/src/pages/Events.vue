@@ -1,21 +1,30 @@
 <script setup>
-import { ref, onMounted } from "vue";
-import { RouterLink } from "vue-router";
+import { ref, onMounted, watch } from "vue";
+import { useRoute, useRouter, RouterLink } from "vue-router";
 import { api } from "@/lib/api";
 import { inr, dateLabel, timeLabel } from "@/lib/format";
 import PageHeader from "@/components/PageHeader.vue";
 import Spinner from "@/components/Spinner.vue";
 import EmptyState from "@/components/EmptyState.vue";
 
+const route = useRoute();
+const router = useRouter();
 const loading = ref(true);
 const spaces = ref([]);
 const events = ref([]);
-const activeSpace = ref(null);
+const activeSpace = ref(route.query.space || null); // pre-filter from ?space=
 
 onMounted(async () => {
   const sp = await api.spaces().catch(() => []);
   spaces.value = (sp || []).filter((s) => s.is_bookable);
   await load();
+});
+
+// If the user navigates here from a different space link while already on the
+// page, re-apply the new filter.
+watch(() => route.query.space, (val) => {
+  activeSpace.value = val || null;
+  load();
 });
 
 async function load() {
@@ -29,6 +38,8 @@ async function load() {
 
 function pick(s) {
   activeSpace.value = activeSpace.value === s ? null : s;
+  // Keep the URL in sync so the filter is shareable / survives refresh.
+  router.replace({ name: "events", query: activeSpace.value ? { space: activeSpace.value } : {} });
   load();
 }
 </script>

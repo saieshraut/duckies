@@ -242,27 +242,57 @@ def my_bookings(limit: int = 20, start: int = 0):
 
 @frappe.whitelist(allow_guest=True)
 def menu():
-    root = (frappe.get_cached_doc("Duckies Settings").menu_root_item_group
-            or "All Item Groups")
-    groups = [root] + frappe.get_all(
-        "Item Group", filters={"parent_item_group": root}, pluck="name")
-    # include one more level (e.g. Kitchen & Bar → Cocktails → Signature)
-    for g in list(groups):
-        groups += frappe.get_all(
-            "Item Group", filters={"parent_item_group": g}, pluck="name")
+    """Return the menu as ordered sections, each with its items and the set of
+    sub-category filters present.
 
-    items = frappe.get_all(
-        "Item",
-        filters={"disabled": 0, "is_sales_item": 1,
-                 "item_group": ("in", list(set(groups)))},
-        fields=["item_code", "item_name", "item_group", "image",
-                "standard_rate", "description"],
-        order_by="item_group asc, item_name asc",
-    )
-    out = {}
-    for it in items:
-        out.setdefault(it.item_group, []).append(it)
-    return out
+    Shape:
+      {
+        "sections": [
+          {"name": "Small Plates",
+           "categories": ["Veg", "Non-Veg"],
+           "items": [{item_code, item_name, standard_rate, image,
+                      description, category, age_restricted}, ...]},
+          {"name": "Cocktails", "categories": [...], "items": [...]}
+        ]
+      }
+    The app renders one tab per section and "All / <category>" filter chips.
+    """
+    root = (frappe.get_cached_doc("Duckies Settings").menu_root_item_group
+            or "From the Kitchen & Bar")
+
+    # Preferred section order (falls back to whatever groups exist under root).
+    preferred = ["Small Plates", "Cocktails"]
+    child_groups = frappe.get_all(
+        "Item Group", filters={"parent_item_group": root}, pluck="name")
+    sections_order = [g for g in preferred if g in child_groups] + \
+        [g for g in child_groups if g not in preferred]
+
+    sections = []
+    for group in sections_order:
+        items = frappe.get_all(
+            "Item",
+            filters={"disabled": 0, "is_sales_item": 1, "item_group": group},
+            fields=["item_code", "item_name", "image", "standard_rate",
+                    "description", "custom_menu_category as category",
+                    "custom_age_restricted as age_restricted"],
+            order_by="custom_menu_category asc, item_name asc",
+        )
+        if not items:
+            continue
+        # Distinct categories present, in a stable order.
+        seen, categories = set(), []
+        for it in items:
+            c = it.get("category")
+            if c and c not in seen:
+                seen.add(c)
+                categories.append(c)
+        sections.append({
+            "name": group,
+            "categories": categories,
+            "items": items,
+        })
+
+    return {"sections": sections}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -316,13 +346,12 @@ def place_order(items):
           remarks=_("Web order {0}").format(order_id))
 
     # 2. Post the Sales Invoice in the background (as Administrator).
-    frappe.enqueue(
+    from duckies.events.api import _safe_enqueue
+    _safe_enqueue(
         "duckies.api.post_order_accounting",
-        queue="short",
         customer=customer,
         items=clean,
         order_id=order_id,
-        enqueue_after_commit=True,
     )
 
     cash, bonus = get_buckets(customer)
