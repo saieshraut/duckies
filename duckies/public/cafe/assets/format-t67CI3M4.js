@@ -1,0 +1,2 @@
+function a(r){return new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:0}).format(Number(r||0))}function u(r){return new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",minimumFractionDigits:2}).format(Number(r||0))}function c(r){return r?new Date(r).toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"}):""}function m(r){if(!r)return"";const[n,t]=String(r).split(":"),e=+n%12||12,i=+n<12?"AM":"PM";return`${e}:${t} ${i}`}export{u as a,c as d,a as i,m as t};
+//# sourceMappingURL=format-t67CI3M4.js.map

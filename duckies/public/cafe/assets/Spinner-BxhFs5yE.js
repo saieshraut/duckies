@@ -1,0 +1,2 @@
+import{h as s,c,b as a}from"./index-BfLZxART.js";const d=(r,e)=>{const t=r.__vccOpts||r;for(const[n,o]of e)t[n]=o;return t},l={},i={class:"flex justify-center py-12"};function _(r,e){return s(),c("div",i,[...e[0]||(e[0]=[a("div",{class:"h-7 w-7 animate-spin rounded-full border-4 border-duck-200 border-t-duck-500"},null,-1)])])}const u=d(l,[["render",_]]);export{u as S};
+//# sourceMappingURL=Spinner-BxhFs5yE.js.map
