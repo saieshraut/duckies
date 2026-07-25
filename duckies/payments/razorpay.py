@@ -144,7 +144,10 @@ def settle_recharge_request(req_name: str, payment_id: str | None = None,
     recharge. Shared by webhook and offline recharges."""
     req = frappe.get_doc("Recharge Request", req_name, for_update=True)
     if req.status == "Paid":
-        return req  # webhook retry — already settled
+        # Already credited (webhook retry). Ensure it's also submitted so the
+        # record isn't left as a stray draft, then return.
+        _ensure_submitted(req)
+        return req
 
     txn, bonus_txn, bonus, je_name = apply_recharge(
         req.customer, req.amount,
@@ -162,7 +165,25 @@ def settle_recharge_request(req_name: str, payment_id: str | None = None,
     if je_name:
         req.db_set("journal_entry", je_name)
     # Accounting is posted inside apply_recharge now — no separate call here.
+
+    # Submit so online recharges end up as a locked, audited docstatus=1
+    # record, consistent with the offline front-desk flow.
+    _ensure_submitted(req)
     return req
+
+
+def _ensure_submitted(req):
+    """Submit a paid Recharge Request if still a draft. The controller's
+    on_submit early-returns for non-Offline channels and for status already
+    'Paid', so this never double-credits. Non-fatal on failure."""
+    req.reload()
+    if req.docstatus == 0 and req.status == "Paid":
+        try:
+            req.flags.ignore_permissions = True
+            req.submit()
+        except Exception:
+            frappe.log_error(title=f"Recharge Request submit failed: {req.name}",
+                             message=frappe.get_traceback())
 
 
 # --------------------------------------------------------------------------

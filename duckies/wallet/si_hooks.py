@@ -15,6 +15,8 @@ The interactive ERPNext POS screen (for the bar counter) still works and is
 governed by validate_wallet_payment below, which blocks non-Wallet tenders.
 """
 
+import contextlib
+
 import frappe
 from frappe import _
 from frappe.utils import flt
@@ -91,6 +93,10 @@ def debit_wallet_on_submit(doc, method=None):
     # already posted by cancel_booking; this credit note is books-only.
     if doc.get("is_return"):
         return
+    # Skip when the caller already debited the wallet synchronously (event
+    # bookings debit against the Cafe Event before enqueuing the invoice).
+    if doc.flags.get("skip_wallet_debit"):
+        return
     amt = doc.grand_total if _is_wallet_customer(doc.customer) else _pos_wallet_amount(doc)
     if not amt:
         return
@@ -142,14 +148,32 @@ def refund_wallet_on_cancel(doc, method=None):
 # Helper used by event bookings and online food orders
 # --------------------------------------------------------------------------
 
-def make_wallet_invoice(customer, items, remarks=None):
+@contextlib.contextmanager
+def _elevated():
+    """Run privileged ERPNext accounting work (Sales Invoice + Payment Entry,
+    whose internal get_party_account/Account reads do a session-user
+    permission check that ignore_permissions does not bypass) as Administrator,
+    then restore the original user.
+
+    Safe because the wallet ledger code in the submit chain takes the customer
+    as an explicit argument and never reads session.user."""
+    original = frappe.session.user
+    frappe.set_user("Administrator")
+    try:
+        yield
+    finally:
+        frappe.set_user(original)
+
+
+def make_wallet_invoice(customer, items, remarks=None, skip_wallet_debit=False):
     """Create + submit a normal Sales Invoice fully paid from the wallet.
 
     ``items``: [{"item_code": ..., "qty": ..., "rate": ...}, ...]
-    Debits the wallet ledger (bonus-first) and settles the invoice with a
-    Payment Entry through the Wallet account. All in one DB transaction, so a
-    failed debit rolls the invoice back too.
-    """
+    ``skip_wallet_debit``: when True, the on_submit hook will NOT debit the
+    wallet (used when the caller already debited synchronously, e.g. event
+    bookings — the invoice is then purely the accounting record).
+
+    Runs the accounting document work elevated (see _elevated)."""
     lock_customer(customer)  # hold the lock across pricing + debit
 
     settings = frappe.get_cached_doc("Duckies Settings")
@@ -158,30 +182,33 @@ def make_wallet_invoice(customer, items, remarks=None):
         frappe.throw(_("Set the Company in Duckies Settings before taking "
                        "wallet payments."))
 
-    si = frappe.get_doc({
-        "doctype": "Sales Invoice",
-        "customer": customer,
-        "company": company,
-        "update_stock": 0,
-        "remarks": remarks,
-        "items": [
-            {
-                "item_code": it["item_code"],
-                "qty": flt(it.get("qty") or 1),
-                "rate": flt(it["rate"]) if it.get("rate") is not None else None,
-            }
-            for it in items
-        ],
-    })
-    si.flags.ignore_permissions = True
-    si.set_missing_values()
-    si.calculate_taxes_and_totals()
-    si.insert()
-    si.submit()  # on_submit -> debit_wallet_on_submit debits the ledger
+    with _elevated():
+        si = frappe.get_doc({
+            "doctype": "Sales Invoice",
+            "customer": customer,
+            "company": company,
+            "update_stock": 0,
+            "remarks": remarks,
+            "items": [
+                {
+                    "item_code": it["item_code"],
+                    "qty": flt(it.get("qty") or 1),
+                    "rate": flt(it["rate"]) if it.get("rate") is not None else None,
+                }
+                for it in items
+            ],
+        })
+        if skip_wallet_debit:
+            si.flags.skip_wallet_debit = True
+        si.flags.ignore_permissions = True
+        si.set_missing_values()
+        si.calculate_taxes_and_totals()
+        si.insert()
+        si.submit()  # on_submit -> debit_wallet_on_submit (unless skipped)
 
-    # Settle the invoice via a Payment Entry through the Wallet account so the
-    # customer ledger / liability account reconciles and the invoice shows Paid.
-    _settle_via_wallet_account(si, company, settings)
+        # Settle the invoice via a Payment Entry through the Wallet account so
+        # the customer ledger / liability account reconciles (shows Paid).
+        _settle_via_wallet_account(si, company, settings)
     return si
 
 

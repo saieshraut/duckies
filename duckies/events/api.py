@@ -19,8 +19,15 @@ def _lock_event(event_name: str):
 
 
 def book_event(customer: str, event: str, seats: int = 1):
-    """Atomically: lock event → check capacity → invoice (wallet debit via
-    hook) → bump seats → create booking. Any failure rolls everything back."""
+    """Book synchronously; post accounting in the background.
+
+    The customer's request only touches custom doctypes it is allowed to use
+    (Wallet Transaction, Cafe Event, Event Booking) — it debits the wallet,
+    reserves seats and creates the booking atomically. The Sales Invoice +
+    Payment Entry (which read Account/GL doctypes a Website User can't access)
+    are posted by a background job running as Administrator, so the customer's
+    session and permissions are never involved in accounting.
+    """
     seats = cint(seats)
     if seats < 1:
         frappe.throw(_("Book at least one seat."))
@@ -45,12 +52,15 @@ def book_event(customer: str, event: str, seats: int = 1):
         ev.item = get_or_create_event_item(ev.event_name)
         ev.db_set("item", ev.item, update_modified=False)
 
-    si = make_wallet_invoice(
-        customer,
-        [{"item_code": ev.item, "qty": seats, "rate": flt(ev.price)}],
-        remarks=_("Booking: {0} on {1}").format(ev.event_name, ev.date),
-    )
+    amount = flt(ev.price) * seats
 
+    # 1. Debit the wallet directly (bonus-first). Custom doctype only — no
+    #    Account access, so no permission/session issues. Throws cleanly on
+    #    insufficient balance, before any seat/booking is created.
+    debit(customer, amount, "Spend", "Cafe Event", ev.name,
+          remarks=_("Booking: {0} on {1}").format(ev.event_name, ev.date))
+
+    # 2. Reserve seats + create the booking.
     ev.db_set("seats_booked", cint(ev.seats_booked) + seats,
               update_modified=False)
 
@@ -59,13 +69,50 @@ def book_event(customer: str, event: str, seats: int = 1):
         "customer": customer,
         "event": ev.name,
         "seats": seats,
-        "amount_paid": si.grand_total,
+        "amount_paid": amount,
         "status": "Confirmed",
         "booked_on": now_datetime(),
-        "sales_invoice": si.name,
     }).insert(ignore_permissions=True)
 
+    # 3. Post accounting (Sales Invoice + settlement) in the background, as
+    #    Administrator. Failure there never affects the confirmed booking or
+    #    the already-correct wallet balance — it's logged and retriable.
+    frappe.enqueue(
+        "duckies.events.api.post_booking_accounting",
+        queue="short",
+        booking=booking.name,
+        enqueue_after_commit=True,
+    )
+
     return booking
+
+
+def post_booking_accounting(booking: str):
+    """Background job: create the wallet-paid Sales Invoice for a booking and
+    link it back. Runs as Administrator (jobs have no web session). Idempotent
+    and non-fatal."""
+    bk = frappe.get_doc("Event Booking", booking)
+    if bk.sales_invoice or bk.status == "Cancelled":
+        return
+
+    ev = frappe.get_doc("Cafe Event", bk.event)
+    item = ev.item or get_or_create_event_item(ev.event_name)
+    try:
+        si = make_wallet_invoice(
+            bk.customer,
+            [{"item_code": item, "qty": cint(bk.seats), "rate": flt(ev.price)}],
+            remarks=_("Booking {0}: {1} on {2}").format(
+                bk.name, ev.event_name, ev.date),
+            skip_wallet_debit=True,  # wallet already debited synchronously
+        )
+        frappe.db.set_value("Event Booking", bk.name, "sales_invoice", si.name,
+                            update_modified=False)
+        frappe.db.commit()
+    except Exception:
+        frappe.db.rollback()
+        frappe.log_error(
+            title=f"Booking accounting failed: {booking}",
+            message=frappe.get_traceback())
 
 
 def cancel_booking(customer: str, booking_name: str):
@@ -101,14 +148,11 @@ def cancel_booking(customer: str, booking_name: str):
             title=_("Too Late to Cancel"),
         )
 
-    # 1. Refund the wallet to the original buckets (idempotent).
+    # 1. Refund the wallet to the original buckets (idempotent, synchronous —
+    #    the customer sees their money back immediately).
     _refund_booking_to_wallet(booking)
 
-    # 2. Credit Note for the books (non-fatal; wallet refund already done).
-    if booking.sales_invoice:
-        _make_credit_note(booking.sales_invoice)
-
-    # 3. Release seats and close the booking.
+    # 2. Release seats and close the booking.
     _lock_event(ev.name)
     ev.db_set(
         "seats_booked",
@@ -116,41 +160,75 @@ def cancel_booking(customer: str, booking_name: str):
         update_modified=False,
     )
     booking.db_set("status", "Cancelled")
+
+    # 3. Credit Note for the books, in the background as Administrator
+    #    (non-fatal; the customer-facing refund is already done).
+    if booking.sales_invoice:
+        frappe.enqueue(
+            "duckies.events.api.post_cancellation_accounting",
+            queue="short",
+            invoice=booking.sales_invoice,
+            enqueue_after_commit=True,
+        )
     return booking
+
+
+def post_cancellation_accounting(invoice):
+    """Background job: raise the Credit Note for a cancelled booking's invoice,
+    as Administrator. Idempotent and non-fatal."""
+    try:
+        _make_credit_note(invoice)
+        frappe.db.commit()
+    except Exception:
+        frappe.db.rollback()
+        frappe.log_error(title=f"Cancellation accounting failed: {invoice}",
+                         message=frappe.get_traceback())
 
 
 def _refund_booking_to_wallet(booking):
     """Post Refund credits mirroring the original Spend debits for this
-    booking's invoice. Idempotent via a [refund:<invoice>] remarks tag."""
+    booking. Bookings debit against the Cafe Event; we mirror each bucket
+    (bonus->bonus, cash->cash). Idempotent via a [refund:<booking>] tag."""
     from duckies.wallet.api import credit
 
-    invoice = booking.sales_invoice
-    if not invoice:
-        return
-
-    refund_tag = f"[refund:{invoice}]"
+    refund_tag = f"[refund:{booking.name}]"
     if frappe.db.exists("Wallet Transaction", {
         "customer": booking.customer, "direction": "Credit", "docstatus": 1,
         "transaction_type": "Refund", "remarks": ("like", f"%{refund_tag}%")}):
         return  # already refunded
 
+    # The original spend was debited against the Cafe Event, tagged with this
+    # booking's event. Match on event + amount to isolate this booking's spend.
     rows = frappe.get_all(
         "Wallet Transaction",
         filters={"customer": booking.customer, "direction": "Debit",
-                 "docstatus": 1, "reference_doctype": "Sales Invoice",
-                 "reference_name": invoice},
-        fields=["bucket", "amount"])
+                 "docstatus": 1, "reference_doctype": "Cafe Event",
+                 "reference_name": booking.event, "transaction_type": "Spend"},
+        fields=["bucket", "amount", "creation"],
+        order_by="creation desc")
+
+    # Take the most recent spend(s) matching this booking's amount so multiple
+    # bookings of the same event refund the correct one.
+    target = flt(booking.amount_paid)
     per_bucket = {"Cash": 0.0, "Bonus": 0.0}
+    acc = 0.0
     for r in rows:
+        if acc >= target - 0.005:
+            break
         per_bucket[r.bucket] = per_bucket.get(r.bucket, 0.0) + flt(r.amount)
+        acc += flt(r.amount)
+
+    # Fallback: if matching came up short, just refund amount_paid to cash.
+    if acc < target - 0.005:
+        per_bucket = {"Cash": target, "Bonus": 0.0}
 
     for bucket, bamt in per_bucket.items():
         if bamt > 0:
             credit(
                 booking.customer, bamt, "Refund", bucket,
-                "Customer", booking.customer,
-                remarks=_("Refund for cancelled booking (invoice {0}) {1}")
-                        .format(invoice, refund_tag),
+                "Event Booking", booking.name,
+                remarks=_("Refund for cancelled booking {0} {1}")
+                        .format(booking.name, refund_tag),
             )
 
 
@@ -167,46 +245,52 @@ def _make_credit_note(invoice_name):
     Non-fatal: logged if it fails, since the wallet refund (the customer-facing
     part) has already succeeded."""
     try:
-        si = frappe.get_doc("Sales Invoice", invoice_name)
-        if si.docstatus != 1:
-            return
-        # Guard against a duplicate credit note for the same invoice.
-        if frappe.db.exists("Sales Invoice",
-                            {"return_against": invoice_name, "docstatus": 1}):
-            return
+        from duckies.wallet.si_hooks import _elevated
+        with _elevated():
+            si = frappe.get_doc("Sales Invoice", invoice_name)
+            if si.docstatus != 1:
+                return
+            # Guard against a duplicate credit note for the same invoice.
+            if frappe.db.exists("Sales Invoice",
+                                {"return_against": invoice_name, "docstatus": 1}):
+                return
 
-        settings = frappe.get_cached_doc("Duckies Settings")
-        cn = frappe.get_doc({
-            "doctype": "Sales Invoice",
-            "customer": si.customer,
-            "company": si.company,
-            "is_return": 1,
-            "return_against": si.name,
-            "update_stock": 0,
-            "items": [
-                {
-                    "item_code": it.item_code,
-                    "qty": -abs(it.qty),
-                    "rate": it.rate,
-                }
-                for it in si.items
-            ],
-        })
-        cn.flags.ignore_permissions = True
-        cn.set_missing_values()
-        cn.calculate_taxes_and_totals()
-
-        # Settle immediately through the Wallet account. For a return, the
-        # payment is negative (money going back to the customer's wallet).
-        if settings.wallet_liability_account:
-            cn.is_pos = 1
-            cn.append("payments", {
-                "mode_of_payment": "Wallet",
-                "account": settings.wallet_liability_account,
-                "amount": cn.grand_total,  # negative for a return
+            settings = frappe.get_cached_doc("Duckies Settings")
+            cn = frappe.get_doc({
+                "doctype": "Sales Invoice",
+                "customer": si.customer,
+                "company": si.company,
+                "is_return": 1,
+                "return_against": si.name,
+                "update_stock": 0,
+                "items": [
+                    {
+                        "item_code": it.item_code,
+                        "qty": -abs(it.qty),
+                        "rate": it.rate,
+                    }
+                    for it in si.items
+                ],
             })
-        cn.insert()
-        cn.submit()
+            cn.flags.ignore_permissions = True
+            cn.set_missing_values()
+            cn.calculate_taxes_and_totals()
+
+            # Settle through the Wallet liability account so the return doesn't
+            # leave a dangling outstanding. This reverses the original invoice's
+            # Dr Wallet Liability into Cr — i.e. the money is accounted back into
+            # "wallet liability", matching the synchronous wallet refund already
+            # posted to the customer. (The return invoice does NOT re-touch the
+            # wallet ledger: debit_wallet_on_submit skips is_return invoices.)
+            if settings.wallet_liability_account:
+                cn.is_pos = 1
+                cn.append("payments", {
+                    "mode_of_payment": "Wallet",
+                    "account": settings.wallet_liability_account,
+                    "amount": cn.grand_total,  # negative for a return
+                })
+            cn.insert()
+            cn.submit()
     except Exception:
         frappe.log_error(title=f"Credit note failed for {invoice_name}",
                          message=frappe.get_traceback())

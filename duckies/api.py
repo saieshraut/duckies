@@ -270,11 +270,15 @@ def place_order(items):
     """items: JSON list of {"item_code": ..., "qty": ...}. Priced from the
     Item master server-side — the client never sets prices.
 
+    Debits the wallet synchronously (custom doctype only), then posts the
+    Sales Invoice in the background as Administrator — so the customer's
+    session never touches accounting doctypes.
+
     Age-restricted (alcohol) items are blocked from the web app entirely:
     Goa's drinking age is 18 and online self-declaration is not a lawful age
     check, so liquor must be served at the bar with in-person verification.
     """
-    from duckies.wallet.si_hooks import make_wallet_invoice
+    from duckies.wallet.api import debit, lock_customer
 
     customer = get_customer_for_user()
     if isinstance(items, str):
@@ -282,34 +286,89 @@ def place_order(items):
     if not items:
         frappe.throw(_("Your order is empty."))
 
-    clean = []
+    clean, total = [], 0.0
     for it in items:
         code, qty = it.get("item_code"), flt(it.get("qty") or 1)
         if qty <= 0:
             continue
         meta = frappe.db.get_value(
             "Item", {"name": code, "disabled": 0, "is_sales_item": 1},
-            ["name", "custom_age_restricted"], as_dict=True)
+            ["name", "custom_age_restricted", "standard_rate"], as_dict=True)
         if not meta:
             frappe.throw(_("Item {0} is not available.").format(code))
         if meta.custom_age_restricted:
             frappe.throw(_("Alcohol can't be ordered through the app. Please "
                            "order at The Dizzy Duck bar — age verification is "
                            "done in person."), title=_("18+ / In-person only"))
-        clean.append({"item_code": code, "qty": qty})  # rate from price list
+        rate = _item_selling_rate(code, meta.standard_rate)
+        total += rate * qty
+        clean.append({"item_code": code, "qty": qty, "rate": rate})
     if not clean:
         frappe.throw(_("Your order is empty."))
 
-    si = make_wallet_invoice(customer, clean, remarks=_("Web order"))
+    total = flt(total, 2)
+
+    # 1. Debit the wallet synchronously (custom doctype; no Account access).
+    #    A unique order id ties the debit to the eventual invoice.
+    order_id = frappe.generate_hash(length=10)
+    lock_customer(customer)
+    debit(customer, total, "Spend", "Web Order", order_id,
+          remarks=_("Web order {0}").format(order_id))
+
+    # 2. Post the Sales Invoice in the background (as Administrator).
+    frappe.enqueue(
+        "duckies.api.post_order_accounting",
+        queue="short",
+        customer=customer,
+        items=clean,
+        order_id=order_id,
+        enqueue_after_commit=True,
+    )
+
     cash, bonus = get_buckets(customer)
     return {
-        "invoice": si.name,
-        "total": si.grand_total,
+        "order_id": order_id,
+        "total": total,
         "balance": cash + bonus,
         "cash_balance": cash,
         "bonus_balance": bonus,
         "message": _("Order placed! It will be with you shortly."),
     }
+
+
+def _item_selling_rate(item_code, fallback):
+    """Best available selling rate for an item: default price-list rate if set,
+    else the item's standard_rate."""
+    settings = frappe.get_cached_doc("Duckies Settings")
+    price_list = frappe.db.get_single_value("Selling Settings",
+                                            "selling_price_list")
+    rate = None
+    if price_list:
+        rate = frappe.db.get_value(
+            "Item Price",
+            {"item_code": item_code, "price_list": price_list, "selling": 1},
+            "price_list_rate")
+    return flt(rate if rate else fallback)
+
+
+def post_order_accounting(customer, items, order_id):
+    """Background job: create the wallet-paid Sales Invoice for a web order.
+    Runs as Administrator. Idempotent (skips if an invoice already carries this
+    order id) and non-fatal."""
+    from duckies.wallet.si_hooks import make_wallet_invoice
+    if frappe.db.exists("Sales Invoice",
+                        {"remarks": ("like", f"%{order_id}%"), "docstatus": 1}):
+        return
+    try:
+        make_wallet_invoice(
+            customer, items,
+            remarks=_("Web order {0}").format(order_id),
+            skip_wallet_debit=True)  # wallet already debited synchronously
+        frappe.db.commit()
+    except Exception:
+        frappe.db.rollback()
+        frappe.log_error(title=f"Web order accounting failed: {order_id}",
+                         message=frappe.get_traceback())
 
 
 # --------------------------------------------------------------------------

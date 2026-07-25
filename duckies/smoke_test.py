@@ -73,10 +73,16 @@ def run():
     print("  event:", ev.name)
 
     print("\n=== 4. Book 2 seats (expect 600: bonus 500 then cash 100) ===")
-    from duckies.events.api import book_event
+    from duckies.events.api import book_event, post_booking_accounting
     bkg = book_event(cust.name, ev.name, 2)
-    _show(cust.name, "after booking")
-    print("  booking:", bkg.name, "| invoice:", bkg.sales_invoice)
+    _show(cust.name, "after booking (wallet debited synchronously)")
+    print("  booking:", bkg.name)
+
+    # Accounting runs in a background job in production; run it inline here.
+    print("  posting accounting (normally a background job)...")
+    post_booking_accounting(bkg.name)
+    bkg.reload()
+    print("  invoice:", bkg.sales_invoice or "(pending)")
 
     print("\n=== 5. Ledger after booking ===")
     _ledger(cust.name)
