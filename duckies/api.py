@@ -175,6 +175,10 @@ def spaces():
 @frappe.whitelist(allow_guest=True)
 def events(space: str | None = None, from_date: str | None = None,
            to_date: str | None = None, limit: int = 50, featured=None):
+    # Hard upper bound on rows, independent of the caller-supplied limit, so a
+    # bad/large request can never load an unbounded result set.
+    page_len = min(max(cint(limit) or 50, 1), 100)
+
     filters = {
         "status": "Upcoming",
         "date": (">=", getdate(from_date) if from_date else getdate(today())),
@@ -192,7 +196,7 @@ def events(space: str | None = None, from_date: str | None = None,
                 "end_time", "price", "capacity", "seats_booked", "image",
                 "description", "is_featured"],
         order_by="date asc, start_time asc",
-        limit_page_length=min(cint(limit) or 50, 200),
+        limit_page_length=page_len,
     )
     for r in rows:
         r["seats_left"] = max(0, cint(r.capacity) - cint(r.seats_booked))
