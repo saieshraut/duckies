@@ -4,7 +4,8 @@
 Compliance model (RBI closed-system PPI + CBIC voucher circulars):
   * Cash bucket  = real money the customer loaded. Refundable to source.
   * Bonus bucket = promotional credit. NON-refundable, expires with wallet.
-  * Spends consume Bonus first, then Cash (standard promo hygiene).
+  * Spends consume Cash first, then Bonus (business policy). Remaining bonus
+    is forfeited on any refund, so refunds never exceed real money in.
   * No cash withdrawal, no third-party payment, no wallet-to-wallet transfer
     — none of those code paths exist, by design.
 
@@ -115,8 +116,15 @@ def credit(customer, amount, txn_type, bucket="Cash",
 
 
 def debit(customer, amount, txn_type, ref_dt=None, ref_dn=None, remarks=None):
-    """Spend across buckets: Bonus first, then Cash. May write two ledger
-    rows (one per bucket touched). Returns the list of txns."""
+    """Spend across buckets: Cash first, then Bonus. May write two ledger
+    rows (one per bucket touched). Returns the list of txns.
+
+    NOTE on ordering: Cash-first means the customer's real money is consumed
+    before promotional bonus. This is the business's chosen policy. Because a
+    refund only ever returns the *remaining* Cash bucket (bonus is never
+    refundable), on any refund the remaining bonus is forfeited — see
+    Wallet Refund Request — so the customer can never both cash out and keep
+    live bonus. That guard keeps refunds safe under cash-first."""
     amount = flt(amount)
     if amount <= 0:
         frappe.throw(_("Debit amount must be positive."))
@@ -134,15 +142,15 @@ def debit(customer, amount, txn_type, ref_dt=None, ref_dn=None, remarks=None):
         )
 
     txns = []
-    from_bonus = min(bonus, amount)
-    if from_bonus > 0:
-        bonus -= from_bonus
-        txns.append(_write_txn(customer, from_bonus, txn_type, "Debit", "Bonus",
-                               cash, bonus, ref_dt, ref_dn, remarks))
-    from_cash = amount - from_bonus
+    from_cash = min(cash, amount)
     if from_cash > 0:
         cash -= from_cash
         txns.append(_write_txn(customer, from_cash, txn_type, "Debit", "Cash",
+                               cash, bonus, ref_dt, ref_dn, remarks))
+    from_bonus = amount - from_cash
+    if from_bonus > 0:
+        bonus -= from_bonus
+        txns.append(_write_txn(customer, from_bonus, txn_type, "Debit", "Bonus",
                                cash, bonus, ref_dt, ref_dn, remarks))
     _persist(customer, cash, bonus)
     _touch_activity(customer)

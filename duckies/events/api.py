@@ -86,7 +86,27 @@ def book_event(customer: str, event: str, seats: int = 1):
     return booking
 
 
-def _safe_enqueue(method, **kwargs):
+@frappe.whitelist(methods=["POST"])
+def staff_book_event(customer: str, event: str, seats: int = 1):
+    """Staff-facing: book an event for a walk-in customer from the desk.
+    Restricted to System Manager / Cafe Manager. Debits the customer's wallet
+    (cash-first) exactly like the customer flow — front desk must have loaded
+    the wallet first (or do an offline recharge)."""
+    frappe.only_for(("System Manager", "Cafe Manager"))
+    if not frappe.db.exists("Customer", customer):
+        frappe.throw(_("Customer {0} not found.").format(customer))
+    booking = book_event(customer, event, cint(seats))
+    from duckies.wallet.api import get_buckets
+    cash, bonus = get_buckets(customer)
+    return {
+        "booking": booking.name,
+        "amount_paid": booking.amount_paid,
+        "cash_balance": cash,
+        "bonus_balance": bonus,
+        "balance": cash + bonus,
+        "message": _("Booked {0} seat(s) for {1}.").format(
+            cint(seats), customer),
+    }
     """Enqueue a background job, but never let queue problems (no worker, no
     redis, inline-execution errors) break the customer-facing request. If the
     job can't be queued, it's logged for later reprocessing."""

@@ -174,13 +174,15 @@ def spaces():
 
 @frappe.whitelist(allow_guest=True)
 def events(space: str | None = None, from_date: str | None = None,
-           to_date: str | None = None, limit: int = 50):
+           to_date: str | None = None, limit: int = 50, featured=None):
     filters = {
         "status": "Upcoming",
         "date": (">=", getdate(from_date) if from_date else getdate(today())),
     }
     if space:
         filters["space"] = space
+    if featured:
+        filters["is_featured"] = 1
     if to_date:
         filters["date"] = ("between", [filters["date"][1], getdate(to_date)])
 
@@ -188,7 +190,7 @@ def events(space: str | None = None, from_date: str | None = None,
         "Cafe Event", filters=filters,
         fields=["name", "event_name", "space", "date", "start_time",
                 "end_time", "price", "capacity", "seats_booked", "image",
-                "description"],
+                "description", "is_featured"],
         order_by="date asc, start_time asc",
         limit_page_length=min(cint(limit) or 50, 200),
     )
@@ -297,17 +299,18 @@ def menu():
 
 @frappe.whitelist(methods=["POST"])
 def place_order(items):
-    """items: JSON list of {"item_code": ..., "qty": ...}. Priced from the
-    Item master server-side — the client never sets prices.
+    """DISABLED — the app menu is view-only. Ordering happens in person at the
+    counter/table and is billed there against the wallet. This endpoint is kept
+    (returning an error) so any stale client can't place orders."""
+    frappe.throw(
+        _("Ordering from the app isn't available. Please order at the counter "
+          "or your table — it'll be billed to your Duckie's wallet."),
+        title=_("View-only menu"))
 
-    Debits the wallet synchronously (custom doctype only), then posts the
-    Sales Invoice in the background as Administrator — so the customer's
-    session never touches accounting doctypes.
 
-    Age-restricted (alcohol) items are blocked from the web app entirely:
-    Goa's drinking age is 18 and online self-declaration is not a lawful age
-    check, so liquor must be served at the bar with in-person verification.
-    """
+def _place_order_disabled(items):
+    """Former online-order implementation, retained for reference but no longer
+    reachable. Kept intact in case in-app ordering is re-enabled later."""
     from duckies.wallet.api import debit, lock_customer
 
     customer = get_customer_for_user()

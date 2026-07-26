@@ -8,13 +8,21 @@ import Spinner from "@/components/Spinner.vue";
 
 const loading = ref(true);
 const spaces = ref([]);
+const featured = ref([]);
 const upcoming = ref([]);
 
 onMounted(async () => {
   try {
-    const [sp, ev] = await Promise.all([api.spaces(), api.events({ limit: 5 })]);
+    const [sp, feat, ev] = await Promise.all([
+      api.spaces(),
+      api.events({ featured: 1, limit: 6 }),
+      api.events({ limit: 5 }),
+    ]);
     spaces.value = sp || [];
-    upcoming.value = ev || [];
+    featured.value = feat || [];
+    // Upcoming excludes anything already shown as featured, to avoid repeats.
+    const featIds = new Set((feat || []).map((e) => e.name));
+    upcoming.value = (ev || []).filter((e) => !featIds.has(e.name));
   } finally {
     loading.value = false;
   }
@@ -43,6 +51,37 @@ onMounted(async () => {
 
     <Spinner v-if="loading" />
     <template v-else>
+      <!-- Featured events -->
+      <section v-if="featured.length" class="mt-5">
+        <div class="mb-2 flex items-center justify-between px-4">
+          <h2 class="text-sm font-bold text-gray-800">✨ Featured</h2>
+          <RouterLink to="/events" class="text-xs font-semibold text-duck-600">All events</RouterLink>
+        </div>
+        <div class="-mx-0 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2">
+          <RouterLink
+            v-for="e in featured"
+            :key="e.name"
+            :to="`/events/${e.name}`"
+            class="w-72 shrink-0 snap-start overflow-hidden rounded-2xl bg-white shadow-md ring-1 ring-gray-100"
+          >
+            <div class="relative h-40 w-full bg-duck-100">
+              <img v-if="e.image" :src="e.image" :alt="e.event_name" class="h-full w-full object-cover" />
+              <div v-else class="flex h-full w-full items-center justify-center text-5xl">🎟️</div>
+              <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+              <span class="absolute left-3 top-3 rounded-full bg-duck-500 px-2 py-0.5 text-[10px] font-bold text-white">FEATURED</span>
+              <div class="absolute bottom-0 left-0 right-0 p-3">
+                <p class="truncate text-base font-extrabold text-white drop-shadow">{{ e.event_name }}</p>
+                <p class="text-xs text-white/90 drop-shadow">{{ dateLabel(e.date) }} · {{ timeLabel(e.start_time) }}</p>
+              </div>
+            </div>
+            <div class="flex items-center justify-between px-3 py-2.5">
+              <span class="text-xs text-gray-500">{{ e.space }}</span>
+              <span class="text-sm font-bold text-duck-600">{{ inr(e.price) }}</span>
+            </div>
+          </RouterLink>
+        </div>
+      </section>
+
       <!-- Upcoming events -->
       <section v-if="upcoming.length" class="mt-5 px-4">
         <div class="mb-2 flex items-center justify-between">
@@ -52,7 +91,10 @@ onMounted(async () => {
         <div class="-mx-4 flex gap-3 overflow-x-auto px-4 pb-2">
           <RouterLink v-for="e in upcoming" :key="e.name" :to="`/events/${e.name}`"
             class="w-44 shrink-0 overflow-hidden rounded-2xl bg-white shadow ring-1 ring-gray-100">
-            <div class="flex h-24 items-center justify-center bg-duck-100 text-3xl">🎟️</div>
+            <div class="h-24 overflow-hidden bg-duck-100">
+              <img v-if="e.image" :src="e.image" :alt="e.event_name" class="h-full w-full object-cover" />
+              <div v-else class="flex h-full items-center justify-center text-3xl">🎟️</div>
+            </div>
             <div class="p-3">
               <p class="truncate text-sm font-bold text-gray-800">{{ e.event_name }}</p>
               <p class="mt-0.5 text-[11px] text-gray-500">{{ dateLabel(e.date) }} · {{ timeLabel(e.start_time) }}</p>

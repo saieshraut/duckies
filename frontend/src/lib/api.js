@@ -90,8 +90,7 @@ export const api = {
   activeOffers: () => call("duckies.api.active_offers"),
 
   spaces: () => call("duckies.api.spaces"),
-  events: (params = {}) => call("duckies.api.events", params),
-  bookEvent: (event, seats = 1) =>
+  events: (params = {}) => call("duckies.api.events", params),  bookEvent: (event, seats = 1) =>
     call("duckies.api.book_event", { event, seats }),
   cancelBooking: (booking) => call("duckies.api.cancel_booking", { booking }),
   myBookings: (limit = 20, start = 0) =>

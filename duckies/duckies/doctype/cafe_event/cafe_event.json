@@ -22,6 +22,7 @@
   "seats_booked",
   "cb1",
   "status",
+  "is_featured",
   "item"
  ],
  "fields": [
@@ -118,6 +119,13 @@
    "in_list_view": 1,
    "label": "Status",
    "options": "Upcoming\nOngoing\nCompleted\nCancelled"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_featured",
+   "fieldtype": "Check",
+   "label": "Featured on Home",
+   "description": "Show this event in the Featured section of the customer app home page."
   },
   {
    "fieldname": "item",
