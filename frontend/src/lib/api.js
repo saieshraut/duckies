@@ -8,6 +8,16 @@ function getCSRF() {
   return m ? decodeURIComponent(m[1]) : "";
 }
 
+// Public (guest-readable) methods can be safely retried with a GET, which is
+// not subject to CSRF — so they always load even when a stale desk session
+// (e.g. logged in as Administrator) causes the POST to fail CSRF with a 400.
+const PUBLIC_METHODS = new Set([
+  "duckies.api.spaces",
+  "duckies.api.events",
+  "duckies.api.menu",
+  "duckies.api.active_offers",
+]);
+
 async function call(method, args = {}, { raw = false } = {}) {
   const res = await fetch(`/api/method/${method}`, {
     method: "POST",
@@ -28,10 +38,40 @@ async function call(method, args = {}, { raw = false } = {}) {
   }
 
   if (!res.ok) {
+    // CSRF/session mismatch (400) on a public method: retry as a GET, which
+    // isn't CSRF-protected, so public data still loads.
+    if (res.status === 400 && PUBLIC_METHODS.has(method)) {
+      try {
+        return await callGet(method, args, { raw });
+      } catch {
+        /* fall through to the original error */
+      }
+    }
     const msg = extractError(data) || `Request failed (${res.status})`;
     const err = new Error(msg);
     err.status = res.status;
     err.data = data;
+    throw err;
+  }
+  return raw ? data : data?.message;
+}
+
+// GET fallback for public, read-only methods.
+async function callGet(method, args = {}, { raw = false } = {}) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(args)) {
+    if (v !== undefined && v !== null) qs.set(k, v);
+  }
+  const url = `/api/method/${method}${qs.toString() ? "?" + qs.toString() : ""}`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    credentials: "include",
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = new Error(extractError(data) || `Request failed (${res.status})`);
+    err.status = res.status;
     throw err;
   }
   return raw ? data : data?.message;
