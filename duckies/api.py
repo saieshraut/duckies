@@ -16,7 +16,12 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, getdate, today, validate_email_address
 
-from duckies.wallet.api import get_balance, get_buckets, get_customer_for_user
+from duckies.wallet.api import (
+    get_balance,
+    get_buckets,
+    get_customer_for_user,
+    qr_code_for_customer,
+)
 
 
 # --------------------------------------------------------------------------
@@ -114,6 +119,7 @@ def get_profile():
         "cash_balance": flt(c.custom_wallet_cash),
         "bonus_balance": flt(c.custom_wallet_bonus),
         "wallet_expiry": exp,
+        "qr_code": qr_code_for_customer(c.name),
     }
 
 
@@ -273,6 +279,8 @@ def menu():
     sections_order = [g for g in preferred if g in child_groups] + \
         [g for g in child_groups if g not in preferred]
 
+    price_list = frappe.db.get_single_value("Selling Settings", "selling_price_list")
+
     sections = []
     for group in sections_order:
         items = frappe.get_all(
@@ -285,6 +293,26 @@ def menu():
         )
         if not items:
             continue
+
+        # standard_rate on Item is only ever set at creation time (it's hidden
+        # on the form afterwards), so the real, editable rate lives in Item
+        # Price against the default selling price list. Prefer that.
+        prices = {}
+        if price_list:
+            prices = {
+                p.item_code: p.price_list_rate
+                for p in frappe.get_all(
+                    "Item Price",
+                    filters={
+                        "item_code": ["in", [it.item_code for it in items]],
+                        "price_list": price_list,
+                        "selling": 1,
+                    },
+                    fields=["item_code", "price_list_rate"],
+                )
+            }
+        for it in items:
+            it.standard_rate = flt(prices.get(it.item_code) or it.standard_rate)
         # Distinct categories present, in a stable order.
         seen, categories = set(), []
         for it in items:

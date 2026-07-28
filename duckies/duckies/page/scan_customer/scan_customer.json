@@ -1,0 +1,22 @@
+{
+ "content": null,
+ "docstatus": 0,
+ "doctype": "Page",
+ "idx": 0,
+ "module": "Duckies",
+ "name": "scan-customer",
+ "owner": "Administrator",
+ "page_name": "Scan Customer",
+ "roles": [
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Cafe Manager"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "title": "Scan Customer"
+}

@@ -91,6 +91,7 @@ bench --site yoursite.local console
 - **Offers**: create *Recharge Offer* rows, e.g. min ₹2000 → Fixed Amount ₹500. Best applicable offer is applied automatically on every recharge.
 - **Front-desk recharge** (customer pays your UPI QR / you allow cash for *loading only*): call `duckies.wallet.api.offline_recharge` (Cafe Manager role) or build a tiny desk page around it.
 - **Corrections**: `duckies.wallet.api.manual_adjustment` (System Manager, reason mandatory).
+- **Identify a customer at the counter**: every customer's Wallet page shows a QR code (payload `DUCKIES-CUST:<customer id>`). Staff open the desk page **Scan Customer** (`/app/scan-customer`, Cafe Manager/System Manager) — either point a handheld/keyboard-wedge scanner at the focused input, or click *Scan with Camera* to decode it with the device camera. Either way it resolves to `duckies.wallet.api.staff_lookup_customer` and shows the customer's name, mobile and wallet balance.
 - **Give staff the Cafe Manager role** — it has full rights on all Duckies doctypes.
 
 ## 4. Customer web app API

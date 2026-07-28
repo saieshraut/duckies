@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from "vue";
 import { RouterLink } from "vue-router";
+import QRCode from "qrcode";
 import { session } from "@/stores/session";
 import { api } from "@/lib/api";
 import { inr, inr2, dateLabel } from "@/lib/format";
@@ -8,18 +9,25 @@ import Spinner from "@/components/Spinner.vue";
 
 const loading = ref(true);
 const txns = ref([]);
+const qrDataUrl = ref(null);
+const u = session.user;
 
 onMounted(async () => {
   try {
     await session.refreshBalance();
     const r = await api.transactions(5, 0);
     txns.value = r.transactions || [];
+    if (u?.qr_code) {
+      qrDataUrl.value = await QRCode.toDataURL(u.qr_code, {
+        margin: 1,
+        width: 220,
+        color: { dark: "#134e4a", light: "#00000000" },
+      });
+    }
   } finally {
     loading.value = false;
   }
 });
-
-const u = session.user;
 </script>
 
 <template>
@@ -56,8 +64,19 @@ const u = session.user;
       </p>
     </div>
 
-    <!-- Quick actions -->
+    <!-- Wallet QR -->
     <div class="-mt-4 px-4">
+      <div class="flex flex-col items-center gap-2 rounded-2xl bg-white px-4 py-5 shadow-md ring-1 ring-gray-100">
+        <img v-if="qrDataUrl" :src="qrDataUrl" alt="Wallet QR code" class="h-40 w-40" />
+        <div v-else class="flex h-40 w-40 items-center justify-center">
+          <Spinner />
+        </div>
+        <p class="text-xs font-semibold text-gray-500">Show this at the counter</p>
+      </div>
+    </div>
+
+    <!-- Quick actions -->
+    <div class="mt-4 px-4">
       <div class="grid grid-cols-2 gap-3">
         <RouterLink to="/recharge" class="flex flex-col items-center gap-1 rounded-2xl bg-white px-4 py-4 shadow-md ring-1 ring-gray-100">
           <span class="flex h-10 w-10 items-center justify-center rounded-full bg-duck-100 text-duck-600">

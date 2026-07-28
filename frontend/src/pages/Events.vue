@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, watch } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
+import { session } from "@/stores/session";
 import { api } from "@/lib/api";
 import { inr, dateLabel, timeLabel } from "@/lib/format";
 import PageHeader from "@/components/PageHeader.vue";
@@ -46,7 +47,11 @@ function pick(s) {
 
 <template>
   <div>
-    <PageHeader title="Events" />
+    <PageHeader title="Events">
+      <template v-if="session.isLoggedIn" #actions>
+        <RouterLink to="/bookings" class="ml-auto text-xs font-semibold text-duck-600">My bookings</RouterLink>
+      </template>
+    </PageHeader>
 
     <!-- Space filter chips -->
     <div class="flex gap-2 overflow-x-auto border-b border-gray-100 px-4 py-3">

@@ -7,6 +7,12 @@ no_cache = 1
 
 
 def get_context(context):
+    if frappe.session.user != "Guest":
+        user_type = frappe.db.get_value("User", frappe.session.user, "user_type")
+        if user_type == "System User":
+            frappe.local.flags.redirect_location = "/app"
+            raise frappe.Redirect
+
     context.csrf_token = frappe.session.csrf_token
     context.script_tag, context.style_tags = _asset_tags()
     return context

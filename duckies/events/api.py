@@ -107,6 +107,9 @@ def staff_book_event(customer: str, event: str, seats: int = 1):
         "message": _("Booked {0} seat(s) for {1}.").format(
             cint(seats), customer),
     }
+
+
+def _safe_enqueue(method, **kwargs):
     """Enqueue a background job, but never let queue problems (no worker, no
     redis, inline-execution errors) break the customer-facing request. If the
     job can't be queued, it's logged for later reprocessing."""

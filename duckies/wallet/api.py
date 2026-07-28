@@ -22,10 +22,22 @@ from frappe.utils import flt, now_datetime
 # Identity
 # --------------------------------------------------------------------------
 
+QR_CODE_PREFIX = "DUCKIES-CUST:"
+
+
+def qr_code_for_customer(customer: str) -> str:
+    """Payload encoded in the customer's wallet QR (shown in the app, scanned
+    by staff at the counter to pull up the customer's name/balance)."""
+    return f"{QR_CODE_PREFIX}{customer}"
+
+
 def get_customer_for_user(user: str | None = None) -> str:
     user = user or frappe.session.user
     if not user or user == "Guest":
         frappe.throw(_("Please log in first."), frappe.AuthenticationError)
+    if frappe.db.get_value("User", user, "user_type") == "System User":
+        frappe.throw(_("System users cannot access the cafe customer app."),
+                     frappe.PermissionError)
     customer = frappe.db.get_value("Customer", {"custom_user": user}, "name")
     if not customer:
         frappe.throw(_("No customer profile is linked to this account. "
@@ -330,6 +342,37 @@ def offline_recharge(customer, amount, payment_mode="Cash", remarks=None,
     return {"recharge_request": req.name, "bonus": req.bonus_amount,
             "cash_balance": cash, "bonus_balance": bonus,
             "balance": cash + bonus}
+
+
+@frappe.whitelist()
+def staff_lookup_customer(code):
+    """Resolve a scanned wallet QR (or a bare Customer ID typed/scanned in)
+    to the customer's identity + balance. Used by the desk "Scan Customer"
+    page — camera scan or a keyboard-wedge handheld scanner both land here."""
+    frappe.only_for(("System Manager", "Cafe Manager"))
+    code = (code or "").strip()
+    if code.startswith(QR_CODE_PREFIX):
+        code = code[len(QR_CODE_PREFIX):]
+    if not code:
+        frappe.throw(_("Empty code."))
+
+    c = frappe.db.get_value(
+        "Customer", code,
+        ["name", "customer_name", "mobile_no", "email_id",
+         "custom_wallet_balance", "custom_wallet_cash", "custom_wallet_bonus"],
+        as_dict=True)
+    if not c:
+        frappe.throw(_("No customer found for this QR code."))
+
+    return {
+        "customer": c.name,
+        "name": c.customer_name,
+        "mobile": c.mobile_no,
+        "email": c.email_id,
+        "wallet_balance": flt(c.custom_wallet_balance),
+        "cash_balance": flt(c.custom_wallet_cash),
+        "bonus_balance": flt(c.custom_wallet_bonus),
+    }
 
 
 @frappe.whitelist()
