@@ -14,7 +14,9 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, getdate, today, validate_email_address
+from frappe.utils import (
+    cint, flt, get_datetime, getdate, now_datetime, today, validate_email_address,
+)
 
 from duckies.wallet.api import (
     get_balance,
@@ -200,12 +202,19 @@ def events(space: str | None = None, from_date: str | None = None,
         "Cafe Event", filters=filters,
         fields=["name", "event_name", "space", "date", "start_time",
                 "end_time", "price", "capacity", "seats_booked", "image",
-                "description", "is_featured"],
+                "description", "is_featured", "is_cancellable",
+                "cancellation_cutoff_hours", "refund_type", "refund_percentage",
+                "refund_flat_amount"],
         order_by="date asc, start_time asc",
         limit_page_length=page_len,
     )
+    from duckies.duckies.cancellation import get_cutoff_hours
+
     for r in rows:
         r["seats_left"] = max(0, cint(r.capacity) - cint(r.seats_booked))
+        # Resolve the effective cutoff (event override, else the global
+        # default) so the app never has to know about Duckies Settings.
+        r["cancellation_cutoff_hours"] = get_cutoff_hours(r)
     return rows
 
 
@@ -226,13 +235,22 @@ def book_event(event: str, seats: int = 1):
 def cancel_booking(booking: str):
     from duckies.events.api import cancel_booking as _cancel
     customer = get_customer_for_user()
-    _cancel(customer, booking)
-    return {"balance": get_balance(customer),
-            "message": _("Booking cancelled and wallet refunded.")}
+    cancelled = _cancel(customer, booking)
+    refund_amount = flt(getattr(cancelled, "refund_amount", 0))
+    message = (
+        _("Booking cancelled. {0} refunded to your wallet.").format(
+            frappe.utils.fmt_money(refund_amount, currency="INR"))
+        if refund_amount > 0
+        else _("Booking cancelled. This event's policy has no refund.")
+    )
+    return {"balance": get_balance(customer), "refund_amount": refund_amount,
+            "message": message}
 
 
 @frappe.whitelist()
 def my_bookings(limit: int = 20, start: int = 0):
+    from duckies.duckies.cancellation import compute_refund_amount, get_cutoff_hours
+
     customer = get_customer_for_user()
     rows = frappe.get_all(
         "Event Booking", filters={"customer": customer},
@@ -243,8 +261,22 @@ def my_bookings(limit: int = 20, start: int = 0):
     for r in rows:
         ev = frappe.db.get_value(
             "Cafe Event", r.event,
-            ["event_name", "space", "date", "start_time"], as_dict=True)
-        r.update(ev or {})
+            ["event_name", "space", "date", "start_time", "is_cancellable",
+             "cancellation_cutoff_hours", "refund_type", "refund_percentage",
+             "refund_flat_amount"],
+            as_dict=True)
+        if not ev:
+            continue
+        r.update({
+            "event_name": ev.event_name, "space": ev.space, "date": ev.date,
+            "start_time": ev.start_time,
+        })
+        cutoff_hours = get_cutoff_hours(ev)
+        start_dt = get_datetime(f"{ev.date} {ev.start_time}")
+        hours_to_go = (start_dt - now_datetime()).total_seconds() / 3600.0
+        r["is_cancellable"] = bool(ev.is_cancellable)
+        r["cutoff_passed"] = hours_to_go < cutoff_hours
+        r["expected_refund"] = compute_refund_amount(ev, r.amount_paid, r.seats)
     return rows
 
 

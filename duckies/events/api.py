@@ -7,6 +7,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, get_datetime, now_datetime
 
+from duckies.duckies.cancellation import compute_refund_amount, get_cutoff_hours
 from duckies.events.tasks import get_or_create_event_item
 from duckies.wallet.si_hooks import make_wallet_invoice
 from duckies.wallet.api import debit, credit, get_buckets
@@ -171,9 +172,13 @@ def cancel_booking(customer: str, booking_name: str):
         frappe.throw(_("Only confirmed bookings can be cancelled."))
 
     ev = frappe.get_doc("Cafe Event", booking.event)
-    cutoff_hours = cint(
-        frappe.get_cached_doc("Duckies Settings").cancellation_cutoff_hours
-    )
+    if not ev.is_cancellable:
+        frappe.throw(
+            _("{0} does not allow self-service cancellation.").format(ev.event_name),
+            title=_("Not Cancellable"),
+        )
+
+    cutoff_hours = get_cutoff_hours(ev)
     start = get_datetime(f"{ev.date} {ev.start_time}")
     hours_to_go = (start - now_datetime()).total_seconds() / 3600.0
     if hours_to_go < cutoff_hours:
@@ -183,9 +188,13 @@ def cancel_booking(customer: str, booking_name: str):
             title=_("Too Late to Cancel"),
         )
 
+    refund_amount = compute_refund_amount(ev, booking.amount_paid, booking.seats)
+
     # 1. Refund the wallet to the original buckets (idempotent, synchronous —
-    #    the customer sees their money back immediately).
-    _refund_booking_to_wallet(booking)
+    #    the customer sees their money back immediately). No-op when the
+    #    event's policy leaves nothing refundable.
+    if refund_amount > 0:
+        _refund_booking_to_wallet(booking, refund_amount)
 
     # 2. Release seats and close the booking.
     _lock_event(ev.name)
@@ -197,20 +206,23 @@ def cancel_booking(customer: str, booking_name: str):
     booking.db_set("status", "Cancelled")
 
     # 3. Credit Note for the books, in the background as Administrator
-    #    (non-fatal; the customer-facing refund is already done).
-    if booking.sales_invoice:
+    #    (non-fatal; the customer-facing refund is already done). Skipped
+    #    entirely when nothing was refunded — the original invoice stands.
+    if booking.sales_invoice and refund_amount > 0:
         _safe_enqueue(
             "duckies.events.api.post_cancellation_accounting",
             invoice=booking.sales_invoice,
+            refund_ratio=refund_amount / flt(booking.amount_paid),
         )
+    booking.refund_amount = refund_amount
     return booking
 
 
-def post_cancellation_accounting(invoice):
+def post_cancellation_accounting(invoice, refund_ratio=1.0):
     """Background job: raise the Credit Note for a cancelled booking's invoice,
     as Administrator. Idempotent and non-fatal."""
     try:
-        _make_credit_note(invoice)
+        _make_credit_note(invoice, flt(refund_ratio) or 1.0)
         frappe.db.commit()
     except Exception:
         frappe.db.rollback()
@@ -218,10 +230,12 @@ def post_cancellation_accounting(invoice):
                          message=frappe.get_traceback())
 
 
-def _refund_booking_to_wallet(booking):
+def _refund_booking_to_wallet(booking, refund_amount):
     """Post Refund credits mirroring the original Spend debits for this
-    booking. Bookings debit against the Cafe Event; we mirror each bucket
-    (bonus->bonus, cash->cash). Idempotent via a [refund:<booking>] tag."""
+    booking, scaled to the amount the event's cancellation policy actually
+    owes back. Bookings debit against the Cafe Event; we mirror each bucket
+    proportionally (bonus->bonus, cash->cash). Idempotent via a
+    [refund:<booking>] tag."""
     from duckies.wallet.api import credit
 
     refund_tag = f"[refund:{booking.name}]"
@@ -255,17 +269,21 @@ def _refund_booking_to_wallet(booking):
     if acc < target - 0.005:
         per_bucket = {"Cash": target, "Bonus": 0.0}
 
+    # Scale each bucket down to the policy-owed refund, keeping the same
+    # cash/bonus proportions as the original spend.
+    ratio = flt(refund_amount) / target if target > 0 else 0.0
     for bucket, bamt in per_bucket.items():
-        if bamt > 0:
+        scaled = bamt * ratio
+        if scaled > 0:
             credit(
-                booking.customer, bamt, "Refund", bucket,
+                booking.customer, scaled, "Refund", bucket,
                 "Event Booking", booking.name,
                 remarks=_("Refund for cancelled booking {0} {1}")
                         .format(booking.name, refund_tag),
             )
 
 
-def _make_credit_note(invoice_name):
+def _make_credit_note(invoice_name, refund_ratio=1.0):
     """Create + submit a return Sales Invoice (Credit Note) against the
     original, settled immediately through the Wallet account so it doesn't
     leave a dangling negative outstanding.
@@ -274,6 +292,11 @@ def _make_credit_note(invoice_name):
     the return is paid via the Wallet mode of payment: this posts
     Dr Revenue-reversal / Cr Wallet Liability, i.e. the amount returns to
     "money we owe on wallets" — which is exactly where it now sits.
+
+    `refund_ratio` scales the reversed rate down for a partial-refund
+    cancellation policy (e.g. a 50% refund policy reverses half the original
+    rate), so the credit note never returns more than the wallet actually
+    got back. Quantities are left as-is; only the rate is scaled.
 
     Non-fatal: logged if it fails, since the wallet refund (the customer-facing
     part) has already succeeded."""
@@ -300,7 +323,7 @@ def _make_credit_note(invoice_name):
                     {
                         "item_code": it.item_code,
                         "qty": -abs(it.qty),
-                        "rate": it.rate,
+                        "rate": flt(it.rate) * flt(refund_ratio),
                     }
                     for it in si.items
                 ],

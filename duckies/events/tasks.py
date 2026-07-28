@@ -139,6 +139,11 @@ def generate_for_template(template_name: str):
             "capacity": cint(t.capacity),
             "status": "Upcoming",
             "item": t.item,
+            "is_cancellable": t.is_cancellable,
+            "cancellation_cutoff_hours": t.cancellation_cutoff_hours,
+            "refund_type": t.refund_type,
+            "refund_percentage": t.refund_percentage,
+            "refund_flat_amount": t.refund_flat_amount,
         }).insert(ignore_permissions=True)
         created += 1
     return created

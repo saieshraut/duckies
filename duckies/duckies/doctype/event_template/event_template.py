@@ -18,6 +18,9 @@ class EventTemplate(Document):
         if self.end_date and self.start_date and self.end_date < self.start_date:
             frappe.throw(_("End Date cannot be before Start Date."))
 
+        from duckies.duckies.cancellation import validate_cancellation_policy
+        validate_cancellation_policy(self)
+
     def before_save(self):
         from duckies.events.tasks import get_or_create_event_item
         if not self.item:

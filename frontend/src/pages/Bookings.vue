@@ -24,7 +24,10 @@ async function load() {
 }
 
 async function cancel(b) {
-  if (!confirm("Cancel this booking? Your wallet will be refunded.")) return;
+  const refundNote = b.expected_refund > 0
+    ? `${inr(b.expected_refund)} will be refunded to your wallet.`
+    : "This event's cancellation policy has no refund — you will not get any money back.";
+  if (!confirm(`Cancel this booking? ${refundNote}`)) return;
   cancelling.value = b.name;
   try {
     const r = await api.cancelBooking(b.name);
@@ -60,10 +63,13 @@ const badge = (s) => ({
           </div>
           <span :class="['shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold', badge(b.status)]">{{ b.status }}</span>
         </div>
-        <button v-if="b.status === 'Confirmed'" @click="cancel(b)" :disabled="cancelling === b.name"
+        <button v-if="b.status === 'Confirmed' && b.is_cancellable && !b.cutoff_passed" @click="cancel(b)" :disabled="cancelling === b.name"
           class="mt-2 text-xs font-semibold text-red-500 disabled:opacity-50">
           {{ cancelling === b.name ? "Cancelling…" : "Cancel booking" }}
         </button>
+        <p v-else-if="b.status === 'Confirmed' && (!b.is_cancellable || b.cutoff_passed)" class="mt-2 text-xs text-gray-400">
+          {{ !b.is_cancellable ? "Not cancellable" : "Cancellation window closed" }}
+        </p>
       </li>
     </ul>
   </div>

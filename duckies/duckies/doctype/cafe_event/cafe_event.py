@@ -11,6 +11,9 @@ class CafeEvent(Document):
         if self.capacity is not None and (self.seats_booked or 0) > self.capacity:
             frappe.throw(_("Seats booked cannot exceed capacity."))
 
+        from duckies.duckies.cancellation import validate_cancellation_policy
+        validate_cancellation_policy(self)
+
     def before_save(self):
         from duckies.events.tasks import get_or_create_event_item
         if not self.item:

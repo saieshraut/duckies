@@ -29,6 +29,26 @@ onMounted(async () => {
 const total = computed(() => (event.value?.price || 0) * seats.value);
 const maxSeats = computed(() => Math.min(event.value?.seats_left || 0, 8));
 
+const cancellationText = computed(() => {
+  const e = event.value;
+  if (!e) return "";
+  if (!e.is_cancellable) return "This event cannot be cancelled once booked.";
+
+  const hrs = Number(e.cancellation_cutoff_hours || 0);
+  const window = hrs === 1 ? "1 hour" : `${hrs} hours`;
+
+  if (e.refund_type === "Flat") {
+    const amt = Number(e.refund_flat_amount || 0);
+    return amt > 0
+      ? `Cancel up to ${window} before start for a refund of ${inr(amt)} per seat.`
+      : `Cancel up to ${window} before start — no refund is given.`;
+  }
+  const pct = e.refund_percentage == null ? 100 : Number(e.refund_percentage);
+  if (pct <= 0) return `Cancel up to ${window} before start — no refund is given.`;
+  if (pct >= 100) return `Free cancellation up to ${window} before the event starts.`;
+  return `Cancel up to ${window} before start for a ${pct}% refund.`;
+});
+
 async function book() {
   if (!session.isLoggedIn) {
     router.push({ name: "login", query: { redirect: route.fullPath } });
@@ -37,6 +57,10 @@ async function book() {
   if ((session.user?.wallet_balance ?? 0) < total.value) {
     toast("Insufficient balance. Please recharge.", "error");
     router.push("/recharge");
+    return;
+  }
+  const seatLabel = seats.value === 1 ? "1 seat" : `${seats.value} seats`;
+  if (!confirm(`Book ${seatLabel} for ${event.value.event_name}? ${inr(total.value)} will be deducted from your wallet.`)) {
     return;
   }
   booking.value = true;
@@ -75,6 +99,14 @@ async function book() {
               {{ event.seats_left }} / {{ event.capacity }} left
             </p>
           </div>
+        </div>
+
+        <div
+          class="mt-3 flex items-start gap-2 rounded-xl px-3 py-2.5 text-xs"
+          :class="event.is_cancellable ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'"
+        >
+          <span class="mt-0.5">{{ event.is_cancellable ? "✓" : "✕" }}</span>
+          <span>{{ cancellationText }}</span>
         </div>
 
         <div v-if="event.description" class="mt-4 text-sm leading-relaxed text-gray-600" v-html="event.description" />
