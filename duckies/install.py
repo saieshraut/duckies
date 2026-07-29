@@ -94,6 +94,19 @@ def make_custom_fields():
                 "insert_after": "custom_wallet_cb",
             },
             {
+                "fieldname": "custom_wallet_reminders_sent",
+                "fieldtype": "Data",
+                "label": "Wallet Expiry Reminders Sent (internal)",
+                "read_only": 1, "no_copy": 1, "hidden": 1,
+                "description": "Tracks which expiry_reminder_days thresholds "
+                               "have already been notified for the CURRENT "
+                               "expiry cycle, so a missed scheduler run "
+                               "catches up instead of silently skipping a "
+                               "reminder. Format: '<expiry_date>|<days,...>'. "
+                               "Written by wallet.expiry.send_expiry_reminders.",
+                "insert_after": "custom_wallet_last_activity",
+            },
+            {
                 "fieldname": "custom_user",
                 "fieldtype": "Link", "options": "User",
                 "label": "Portal User",
@@ -210,7 +223,7 @@ def make_item_groups():
     ensure("Events", "All Item Groups")
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def setup_menu_groups():
     """Idempotently create the Small Plates / Cocktails groups and the Menu
     Category field on existing installs (run once from bench console after
@@ -253,7 +266,7 @@ def set_default_settings():
 # Run once after the ERPNext setup wizard has created your Company
 # --------------------------------------------------------------------------
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def setup_accounts(company: str):
     """Creates the wallet liability + promo expense accounts, wires the
     Wallet mode of payment to the liability account, and fills Duckies
@@ -338,7 +351,7 @@ def _any_output_gst_account(company: str):
     return candidates[0].name if candidates else None
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def setup_tax_templates(company: str):
     """Create Item Tax Templates for the three redemption rates and attach
     them to the right Item Groups.

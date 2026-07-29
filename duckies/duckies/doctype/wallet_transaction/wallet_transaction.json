@@ -43,7 +43,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Transaction Type",
-   "options": "Recharge\nBonus\nSpend\nRefund\nAdjustment\nExpiry",
+   "options": "Recharge\nBonus\nSpend\nRefund\nAdjustment\nExpiry\nForfeiture",
    "reqd": 1
   },
   {

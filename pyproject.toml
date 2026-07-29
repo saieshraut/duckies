@@ -5,7 +5,11 @@ description = "Prepaid wallet, spaces, events & bookings for Duckie's Sports Caf
 requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["version"]
-dependencies = []
+dependencies = [
+    # "frappe~=15.0.0" # Installed and managed by bench.
+    # "erpnext~=15.0.0" # Installed and managed by bench (required_apps in hooks.py).
+    "requests",  # used directly in duckies/payments/razorpay.py
+]
 
 [build-system]
 requires = ["flit_core >=3.4,<4"]

@@ -71,7 +71,11 @@ Duckies Settings) — confirm Goa's requirement with your CA.
   GST** (CBIC 243/37/2024).
 - **Refunds**: unused **cash** is refundable to the original source
   (`request_refund` → staff `process_refund` → Razorpay refund + reversal JE).
-  **Bonus is never refundable** and the code enforces the cap.
+  **Bonus is never refundable**: the code enforces the cap (a refund can
+  never ask for more than the Cash bucket) *and*, on processing, forfeits
+  any remaining Bonus in the same step (`wallet.api.forfeit_bonus`) — so a
+  customer can never cash out real money while keeping live promotional
+  credit funded by the same recharge.
 
 ## 4. DPDP Act 2023 (rules notified Nov 2025)
 

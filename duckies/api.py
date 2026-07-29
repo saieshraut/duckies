@@ -10,8 +10,6 @@ All endpoints: POST /api/method/duckies.api.<function>
 (GET also works for the read-only ones.)
 """
 
-import json
-
 import frappe
 from frappe import _
 from frappe.utils import (
@@ -45,8 +43,11 @@ def register(full_name: str, email: str, mobile: str, password: str,
     """
     email = (email or "").strip().lower()
     validate_email_address(email, throw=True)
+    mobile = (mobile or "").strip()
     if not (full_name or "").strip():
         frappe.throw(_("Please tell us your name."))
+    if not mobile:
+        frappe.throw(_("Please provide a mobile number."))
     if len(password or "") < 8:
         frappe.throw(_("Password must be at least 8 characters."))
     if not cint(consent):
@@ -54,6 +55,14 @@ def register(full_name: str, email: str, mobile: str, password: str,
                        "Notice to create an account."))
     if frappe.db.exists("User", email):
         frappe.throw(_("An account with this email already exists. Please log in."))
+    # One wallet per phone number: prevents the same person opening repeat
+    # accounts to re-claim first-recharge bonus offers, and catches
+    # accidental duplicate signups. Family members (add_family_member) don't
+    # carry their own mobile_no, so they never collide with this check.
+    if frappe.db.exists("Customer", {"mobile_no": mobile}):
+        frappe.throw(_("An account with this mobile number already exists. "
+                       "Please log in, or contact the front desk if this "
+                       "isn't you."))
 
     first, _sep, last = full_name.strip().partition(" ")
     user = frappe.get_doc({
@@ -365,106 +374,16 @@ def menu():
 def place_order(items):
     """DISABLED — the app menu is view-only. Ordering happens in person at the
     counter/table and is billed there against the wallet. This endpoint is kept
-    (returning an error) so any stale client can't place orders."""
+    (returning an error) so any stale client can't place orders.
+
+    The former online-order implementation (wallet debit + background
+    Sales Invoice posting) lived here; it's gone from HEAD but preserved in
+    git history if in-app ordering is re-enabled later — see the project's
+    version control log for `_place_order_disabled`."""
     frappe.throw(
         _("Ordering from the app isn't available. Please order at the counter "
           "or your table — it'll be billed to your Duckie's wallet."),
         title=_("View-only menu"))
-
-
-def _place_order_disabled(items):
-    """Former online-order implementation, retained for reference but no longer
-    reachable. Kept intact in case in-app ordering is re-enabled later."""
-    from duckies.wallet.api import debit, lock_customer
-
-    customer = get_customer_for_user()
-    if isinstance(items, str):
-        items = json.loads(items)
-    if not items:
-        frappe.throw(_("Your order is empty."))
-
-    clean, total = [], 0.0
-    for it in items:
-        code, qty = it.get("item_code"), flt(it.get("qty") or 1)
-        if qty <= 0:
-            continue
-        meta = frappe.db.get_value(
-            "Item", {"name": code, "disabled": 0, "is_sales_item": 1},
-            ["name", "custom_age_restricted", "standard_rate"], as_dict=True)
-        if not meta:
-            frappe.throw(_("Item {0} is not available.").format(code))
-        if meta.custom_age_restricted:
-            frappe.throw(_("Alcohol can't be ordered through the app. Please "
-                           "order at The Dizzy Duck bar — age verification is "
-                           "done in person."), title=_("18+ / In-person only"))
-        rate = _item_selling_rate(code, meta.standard_rate)
-        total += rate * qty
-        clean.append({"item_code": code, "qty": qty, "rate": rate})
-    if not clean:
-        frappe.throw(_("Your order is empty."))
-
-    total = flt(total, 2)
-
-    # 1. Debit the wallet synchronously (custom doctype; no Account access).
-    #    A unique order id ties the debit to the eventual invoice.
-    order_id = frappe.generate_hash(length=10)
-    lock_customer(customer)
-    debit(customer, total, "Spend", "Web Order", order_id,
-          remarks=_("Web order {0}").format(order_id))
-
-    # 2. Post the Sales Invoice in the background (as Administrator).
-    from duckies.events.api import _safe_enqueue
-    _safe_enqueue(
-        "duckies.api.post_order_accounting",
-        customer=customer,
-        items=clean,
-        order_id=order_id,
-    )
-
-    cash, bonus = get_buckets(customer)
-    return {
-        "order_id": order_id,
-        "total": total,
-        "balance": cash + bonus,
-        "cash_balance": cash,
-        "bonus_balance": bonus,
-        "message": _("Order placed! It will be with you shortly."),
-    }
-
-
-def _item_selling_rate(item_code, fallback):
-    """Best available selling rate for an item: default price-list rate if set,
-    else the item's standard_rate."""
-    settings = frappe.get_cached_doc("Duckies Settings")
-    price_list = frappe.db.get_single_value("Selling Settings",
-                                            "selling_price_list")
-    rate = None
-    if price_list:
-        rate = frappe.db.get_value(
-            "Item Price",
-            {"item_code": item_code, "price_list": price_list, "selling": 1},
-            "price_list_rate")
-    return flt(rate if rate else fallback)
-
-
-def post_order_accounting(customer, items, order_id):
-    """Background job: create the wallet-paid Sales Invoice for a web order.
-    Runs as Administrator. Idempotent (skips if an invoice already carries this
-    order id) and non-fatal."""
-    from duckies.wallet.si_hooks import make_wallet_invoice
-    if frappe.db.exists("Sales Invoice",
-                        {"remarks": ("like", f"%{order_id}%"), "docstatus": 1}):
-        return
-    try:
-        make_wallet_invoice(
-            customer, items,
-            remarks=_("Web order {0}").format(order_id),
-            skip_wallet_debit=True)  # wallet already debited synchronously
-        frappe.db.commit()
-    except Exception:
-        frappe.db.rollback()
-        frappe.log_error(title=f"Web order accounting failed: {order_id}",
-                         message=frappe.get_traceback())
 
 
 # --------------------------------------------------------------------------
@@ -475,12 +394,16 @@ def post_order_accounting(customer, items, order_id):
 def request_refund(amount, reason=None):
     """Customer asks to refund unused CASH balance to source. Creates a
     Requested refund for staff to approve + process. Bonus is never
-    refundable, so the ask is capped at the cash bucket."""
+    refundable, so the ask is capped at the cash bucket — and any live Bonus
+    is forfeited when the refund is processed (see
+    payments.razorpay.process_refund / wallet.api.forfeit_bonus), since a
+    customer can't cash out real money and keep promotional credit funded by
+    the same recharge."""
     customer = get_customer_for_user()
     s = frappe.get_cached_doc("Duckies Settings")
     if not s.allow_self_refund:
         frappe.throw(_("Please raise refund requests at the front desk."))
-    cash, _bonus = get_buckets(customer)
+    cash, bonus = get_buckets(customer)
     amount = flt(amount)
     if amount <= 0 or amount > cash + 0.005:
         frappe.throw(_("You can refund up to your refundable cash balance "
@@ -500,9 +423,17 @@ def request_refund(amount, reason=None):
     })
     req.flags.ignore_permissions = True
     req.insert()
-    return {"refund_request": req.name,
-            "message": _("Refund requested. We'll process it to your original "
-                         "payment method shortly.")}
+    message = _("Refund requested. We'll process it to your original "
+                "payment method shortly.")
+    if bonus > 0:
+        message = _(
+            "Refund requested. We'll process it to your original payment "
+            "method shortly. Note: your bonus balance of {0} will be "
+            "forfeited when this refund is processed, as promotional "
+            "credit can't be cashed out.").format(
+                frappe.format_value(bonus, {"fieldtype": "Currency"}))
+    return {"refund_request": req.name, "bonus_at_risk": bonus,
+            "message": message}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -536,8 +467,23 @@ def add_family_member(full_name, is_minor: int = 0):
 def delete_my_account():
     """DPDP right to erasure. We anonymise personal data but RETAIN financial
     documents (invoices, ledger) — tax law requires 6-8 year retention, and
-    DPDP permits retention required by law. The login is disabled."""
+    DPDP permits retention required by law. The login is disabled.
+
+    Blocked while the wallet still holds a balance: disabling the login
+    without disposing of the balance first would strand the customer's money
+    behind an account they can no longer access themselves. They must spend
+    it down or request a cash refund (request_refund) before deleting."""
     customer = get_customer_for_user()
+    balance = get_balance(customer)
+    if balance > 0.005:
+        frappe.throw(
+            _("You still have {0} in your wallet. Please spend it or "
+              "request a refund of your cash balance before closing your "
+              "account — closing the account disables login, and staff "
+              "will need to help you recover funds afterwards.").format(
+                  frappe.format_value(balance, {"fieldtype": "Currency"})),
+            title=_("Wallet balance not zero"),
+        )
     user = frappe.db.get_value("Customer", customer, "custom_user")
     frappe.db.set_value("Customer", customer, {
         "customer_name": f"Deleted Customer {customer}",

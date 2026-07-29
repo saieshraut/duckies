@@ -42,7 +42,7 @@ def _auth():
 # Step 1: customer asks to recharge → create Razorpay Order
 # --------------------------------------------------------------------------
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def create_recharge_order(amount):
     customer = get_customer_for_user()
     amount = flt(amount)
@@ -190,17 +190,18 @@ def _ensure_submitted(req):
 # Refund of unused CASH balance to the original payment source
 # --------------------------------------------------------------------------
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def process_refund(refund_request: str):
     """Staff-approved refund of refundable cash balance.
 
-    Flow: validate against cash bucket -> debit wallet (Cash) -> Razorpay
-    refund against the original payment -> reversal Journal Entry
-    (Dr Wallet Liability / Cr Bank). Bonus credit is never refundable, so
-    only the Cash bucket is ever touched.
+    Flow: validate against cash bucket -> debit wallet (Cash) -> forfeit any
+    remaining Bonus -> Razorpay refund against the original payment ->
+    reversal Journal Entry (Dr Wallet Liability / Cr Bank). Bonus credit is
+    never refundable and cannot survive a cash-out, so it is forfeited in
+    the same step that returns the cash.
     """
     frappe.only_for(("System Manager", "Cafe Manager"))
-    from duckies.wallet.api import debit, get_buckets
+    from duckies.wallet.api import debit, forfeit_bonus, get_buckets
 
     req = frappe.get_doc("Wallet Refund Request", refund_request, for_update=True)
     if req.status == "Processed":
@@ -219,6 +220,18 @@ def process_refund(refund_request: str):
                  "Wallet Refund Request", req.name,
                  remarks=req.reason or _("Wallet refund"))
     req.db_set("wallet_transaction", txns[-1].name)
+
+    # 1b. A cash-out to an external source forfeits any live Bonus — the
+    # customer can never both take real money out AND keep promotional
+    # credit funded by that same recharge (see wallet/api.py forfeit_bonus).
+    # This runs in the same DB transaction as the Cash debit above, so if
+    # the Razorpay call below fails and we throw, both roll back together.
+    forfeit_txn = forfeit_bonus(
+        req.customer, "Wallet Refund Request", req.name,
+        remarks=_("Bonus forfeited: wallet refund {0}").format(req.name))
+    if forfeit_txn:
+        req.db_set("bonus_forfeited", forfeit_txn.amount)
+        req.db_set("bonus_forfeited_transaction", forfeit_txn.name)
 
     # 2. Reverse to source via Razorpay (if an online recharge is referenced).
     if req.refund_to == "Original Payment Source" and req.original_recharge:

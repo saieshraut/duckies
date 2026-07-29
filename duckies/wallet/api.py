@@ -5,7 +5,9 @@ Compliance model (RBI closed-system PPI + CBIC voucher circulars):
   * Cash bucket  = real money the customer loaded. Refundable to source.
   * Bonus bucket = promotional credit. NON-refundable, expires with wallet.
   * Spends consume Cash first, then Bonus (business policy). Remaining bonus
-    is forfeited on any refund, so refunds never exceed real money in.
+    is forfeited on any cash-out-to-source refund (see forfeit_bonus, called
+    from payments.razorpay.process_refund), so a refund can never leave the
+    customer holding both their money back AND live promotional credit.
   * No cash withdrawal, no third-party payment, no wallet-to-wallet transfer
     — none of those code paths exist, by design.
 
@@ -127,39 +129,63 @@ def credit(customer, amount, txn_type, bucket="Cash",
     return txn
 
 
-def debit(customer, amount, txn_type, ref_dt=None, ref_dn=None, remarks=None):
-    """Spend across buckets: Cash first, then Bonus. May write two ledger
-    rows (one per bucket touched). Returns the list of txns.
+def debit(customer, amount, txn_type, ref_dt=None, ref_dn=None, remarks=None,
+          bucket=None):
+    """Debit the wallet. May write two ledger rows (one per bucket touched).
+    Returns the list of txns.
+
+    ``bucket=None`` (default, used by all spend/refund paths): spend across
+    buckets, Cash first then Bonus.
 
     NOTE on ordering: Cash-first means the customer's real money is consumed
     before promotional bonus. This is the business's chosen policy. Because a
     refund only ever returns the *remaining* Cash bucket (bonus is never
-    refundable), on any refund the remaining bonus is forfeited — see
-    Wallet Refund Request — so the customer can never both cash out and keep
-    live bonus. That guard keeps refunds safe under cash-first."""
+    refundable), payments.razorpay.process_refund forfeits any remaining
+    Bonus via forfeit_bonus() in the same step — so the customer can never
+    both cash out and keep live bonus. That guard keeps refunds safe under
+    cash-first.
+
+    ``bucket="Cash"`` or ``"Bonus"``: debit ONLY that bucket (fails if it
+    alone doesn't cover the amount, even if the other bucket would). Used by
+    manual_adjustment, where a System Manager explicitly picks which bucket
+    to correct."""
     amount = flt(amount)
     if amount <= 0:
         frappe.throw(_("Debit amount must be positive."))
+    if bucket is not None and bucket not in ("Cash", "Bonus"):
+        frappe.throw(_("Invalid wallet bucket."))
     lock_customer(customer)
     cash, bonus = get_buckets(customer)
 
-    if amount > cash + bonus + 0.005:  # paise tolerance
+    if bucket == "Cash":
+        available = cash
+    elif bucket == "Bonus":
+        available = bonus
+    else:
+        available = cash + bonus
+    if amount > available + 0.005:  # paise tolerance
         frappe.throw(
-            _("Insufficient wallet balance. Available: {0}, required: {1}. "
+            _("Insufficient {0}balance. Available: {1}, required: {2}. "
               "Please recharge your wallet.").format(
-                frappe.format_value(cash + bonus, {"fieldtype": "Currency"}),
+                (_(bucket) + " ") if bucket else "",
+                frappe.format_value(available, {"fieldtype": "Currency"}),
                 frappe.format_value(amount, {"fieldtype": "Currency"}),
             ),
             title=_("Insufficient Balance"),
         )
 
     txns = []
-    from_cash = min(cash, amount)
+    if bucket == "Bonus":
+        from_cash, from_bonus = 0.0, amount
+    elif bucket == "Cash":
+        from_cash, from_bonus = amount, 0.0
+    else:
+        from_cash = min(cash, amount)
+        from_bonus = amount - from_cash
     if from_cash > 0:
         cash -= from_cash
         txns.append(_write_txn(customer, from_cash, txn_type, "Debit", "Cash",
                                cash, bonus, ref_dt, ref_dn, remarks))
-    from_bonus = amount - from_cash
     if from_bonus > 0:
         bonus -= from_bonus
         txns.append(_write_txn(customer, from_bonus, txn_type, "Debit", "Bonus",
@@ -167,6 +193,26 @@ def debit(customer, amount, txn_type, ref_dt=None, ref_dn=None, remarks=None):
     _persist(customer, cash, bonus)
     _touch_activity(customer)
     return txns
+
+
+def forfeit_bonus(customer, ref_dt=None, ref_dn=None, remarks=None):
+    """Zero out the Bonus bucket. MUST be called whenever Cash is refunded to
+    an external source (request_refund/process_refund) — a refund-to-source
+    physically hands real money back, and the customer can never be allowed
+    to also walk away with live promotional credit funded by that same
+    recharge. No-op (returns None) if there is no bonus to forfeit.
+
+    Deliberately bypasses debit()'s cash-first ordering: this always empties
+    Bonus specifically, regardless of the Cash balance."""
+    lock_customer(customer)
+    cash, bonus = get_buckets(customer)
+    if bonus <= 0:
+        return None
+    txn = _write_txn(customer, bonus, "Forfeiture", "Debit", "Bonus",
+                     cash, 0.0, ref_dt, ref_dn, remarks)
+    _persist(customer, cash, 0.0)
+    _touch_activity(customer)
+    return txn
 
 
 def has_txn_for_reference(customer, direction, ref_dt, ref_dn) -> bool:
@@ -187,7 +233,10 @@ def get_applicable_bonus(amount: float):
         "Recharge Offer",
         filters={"is_active": 1, "min_recharge_amount": ("<=", amount)},
         fields=["name", "bonus_type", "bonus_amount", "bonus_percent",
-                "valid_from", "valid_to"])
+                "valid_from", "valid_to"],
+        # Deterministic row order so a tie between two equally-good offers
+        # always resolves to the same one, regardless of DB storage order.
+        order_by="name asc")
     best, best_offer = 0.0, None
     for o in offers:
         if o.valid_from and str(o.valid_from) > today:
@@ -317,7 +366,7 @@ def post_recharge_accounting(customer, amount, bonus, ref_dt=None, ref_dn=None,
 # Staff / offline helpers
 # --------------------------------------------------------------------------
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def offline_recharge(customer, amount, payment_mode="Cash", remarks=None,
                      payment_account=None, payment_reference=None):
     """Front-desk recharge. Creates + submits an Offline Recharge Request,
@@ -344,7 +393,7 @@ def offline_recharge(customer, amount, payment_mode="Cash", remarks=None,
             "balance": cash + bonus}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def staff_lookup_customer(code):
     """Resolve a scanned wallet QR (or a bare Customer ID typed/scanned in)
     to the customer's identity + balance. Used by the desk "Scan Customer"
@@ -375,15 +424,19 @@ def staff_lookup_customer(code):
     }
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def manual_adjustment(customer, amount, direction, bucket, remarks):
+    """``bucket`` ("Cash" or "Bonus") is honoured for BOTH directions: a
+    Credit adds to that bucket, and a Debit is taken from that bucket only
+    (not cash-first) — so a System Manager correcting an over-credited Bonus
+    row, say, can be sure the correction actually lands on Bonus."""
     frappe.only_for("System Manager")
     if not (remarks or "").strip():
         frappe.throw(_("A reason is mandatory for manual adjustments."))
     if direction == "Credit":
         credit(customer, amount, "Adjustment", bucket, remarks=remarks)
     else:
-        debit(customer, amount, "Adjustment", remarks=remarks)
+        debit(customer, amount, "Adjustment", remarks=remarks, bucket=bucket)
     cash, bonus = get_buckets(customer)
     return {"cash_balance": cash, "bonus_balance": bonus,
             "balance": cash + bonus}
