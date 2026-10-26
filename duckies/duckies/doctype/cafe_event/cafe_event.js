@@ -1,6 +1,30 @@
 // Copyright (c) 2026, Duckie's Sports Cafe
+
+// Kept in sync with EDITABLE_AFTER_CREATION in cafe_event.py: once an event
+// exists, only these fields can actually be saved — everything else is
+// grayed out here so the desk UI doesn't let staff edit a field only to
+// have the save rejected server-side.
+const EDITABLE_AFTER_CREATION = ["price", "status", "capacity"];
+
 frappe.ui.form.on("Cafe Event", {
+    onload(frm) {
+        if (frm.is_new()) {
+            // Events must be created at least 1 day ahead (see validate_event_date
+            // in cafe_event.py) — stop the date picker from offering today/past.
+            frm.set_df_property("date", "min_date", frappe.datetime.add_days(frappe.datetime.get_today(), 1));
+        }
+    },
+
     refresh(frm) {
+        if (!frm.is_new()) {
+            frm.fields.forEach((f) => {
+                if (!EDITABLE_AFTER_CREATION.includes(f.df.fieldname)
+                    && !frappe.model.layout_fields.includes(f.df.fieldtype)) {
+                    frm.set_df_property(f.df.fieldname, "read_only", 1);
+                }
+            });
+        }
+
         if (frm.is_new()) return;
         if (frm.doc.status !== "Upcoming") return;
 

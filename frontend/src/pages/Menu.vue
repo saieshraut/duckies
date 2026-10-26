@@ -82,8 +82,9 @@ function pickSection(i) {
             <div class="flex items-center gap-1.5">
               <p class="truncate font-semibold text-gray-900">{{ it.item_name }}</p>
               <span v-if="it.category" class="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500">{{ it.category }}</span>
+              <span v-if="it.age_restricted" class="shrink-0 rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-bold text-red-500">18+</span>
             </div>
-            <p v-if="it.description" class="mt-0.5 line-clamp-2 text-xs text-gray-400">{{ it.description }}</p>
+            <p v-if="it.description" class="mt-0.5 line-clamp-2 text-xs text-gray-400" v-html="it.description"></p>
           </div>
           <span class="shrink-0 text-sm font-bold text-duck-600">{{ inr(it.standard_rate) }}</span>
         </li>

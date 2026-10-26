@@ -218,6 +218,37 @@ def cancel_booking(customer: str, booking_name: str):
     return booking
 
 
+def cancel_event_bookings(event: str):
+    """The cafe itself cancelled the whole event (Cafe Event.status ->
+    Cancelled), called from CafeEvent.on_update. Every confirmed booking is
+    refunded in FULL — the event's own cancellation/refund policy
+    (is_cancellable, refund_percentage, ...) only governs a customer
+    cancelling their own seat voluntarily; it doesn't apply when the cafe
+    cancels on them, so it's deliberately not consulted here."""
+    _lock_event(event)
+    bookings = frappe.get_all(
+        "Event Booking",
+        filters={"event": event, "status": "Confirmed"},
+        fields=["name", "customer", "event", "amount_paid", "seats", "sales_invoice"],
+    )
+    for bk in bookings:
+        amount = flt(bk.amount_paid)
+        if amount > 0:
+            _refund_booking_to_wallet(bk, amount)
+        frappe.db.set_value("Event Booking", bk.name, "status", "Cancelled",
+                            update_modified=False)
+        if bk.sales_invoice and amount > 0:
+            _safe_enqueue(
+                "duckies.events.api.post_cancellation_accounting",
+                invoice=bk.sales_invoice,
+                refund_ratio=1.0,
+            )
+
+    frappe.db.set_value("Cafe Event", event, "seats_booked", 0,
+                        update_modified=False)
+    return len(bookings)
+
+
 def post_cancellation_accounting(invoice, refund_ratio=1.0):
     """Background job: raise the Credit Note for a cancelled booking's invoice,
     as Administrator. Idempotent and non-fatal."""

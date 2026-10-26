@@ -55,6 +55,7 @@ bench --site yoursite.local clear-cache
 - Item Groups: `From the Kitchen & Bar` → Food / Cocktails / Spirits / Non-Alcoholic, plus `Events`
 - The five Cafe Spaces
 - Sane defaults in Duckies Settings
+- System Settings `allow_login_using_mobile_number`, so customers can log in with either email or mobile
 
 ## 2. One-time setup after the ERPNext wizard
 
@@ -73,7 +74,7 @@ bench --site yoursite.local console
    - `deposit_account` — the bank account Razorpay settles into
    - `breakage_income_account` — auto-set, confirm it
    - `wallet_validity_months` (default 12), `expiry_reminder_days` (default `30,7`), `allow_self_refund`
-   - `liquor_invoice_naming_series` if your CA wants a separate VAT bill series
+   - `liquor_invoice_naming_series` — reference field only today (no code reads it yet); if your CA requires a separate VAT bill series, set the naming series on the relevant Sales Invoices manually, or wire this field into `si_hooks.make_wallet_invoice` before relying on it
    - Razorpay `key_id`, `key_secret`, `webhook_secret`
 4. In the **Razorpay dashboard** add a webhook:
    - URL: `https://<your-site>/api/method/duckies.payments.razorpay.webhook`
@@ -101,8 +102,8 @@ Responses are wrapped by Frappe as `{"message": <return value>}`.
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `duckies.api.register` | guest | `full_name, email, mobile, password, consent` → creates User+Customer, logs in. **`consent` (1) is mandatory** (DPDP) |
-| `/api/method/login` | guest | Frappe built-in: `usr`, `pwd` |
+| `duckies.api.register` | guest | `full_name, email, mobile, password, consent` → creates User+Customer (Customer ID = mobile number), logs in. **`consent` (1) is mandatory** (DPDP) |
+| `/api/method/login` | guest | Frappe built-in: `usr` (email or mobile number), `pwd` |
 | `/api/method/logout` | session | Frappe built-in |
 | `duckies.api.get_profile` | session | name, mobile, wallet balance |
 | `duckies.api.balance` | session | wallet balance |
@@ -113,8 +114,8 @@ Responses are wrapped by Frappe as `{"message": <return value>}`.
 | `duckies.api.book_event` | session | `event`, `seats` → invoice + wallet debit + booking |
 | `duckies.api.cancel_booking` | session | `booking` → refund if before cutoff |
 | `duckies.api.my_bookings` | session | booking history |
-| `duckies.api.menu` | guest | items grouped by Item Group |
-| `duckies.api.place_order` | session | `items=[{item_code, qty}]` → wallet-paid invoice. Blocks age-restricted (alcohol) items |
+| `duckies.api.menu` | guest | items grouped by Item Group (view-only; `age_restricted` flag included per item) |
+| `duckies.api.place_order` | session | **Disabled.** Always throws — ordering happens in person at the counter/table and is billed to the wallet there, so this endpoint just tells a stale client it isn't available. |
 | `duckies.api.request_refund` | session | `amount, reason` → refund request for unused **cash** (bonus is non-refundable) |
 | `duckies.api.add_family_member` | session | `full_name, is_minor` → guardian-linked profile paid from your wallet |
 | `duckies.api.delete_my_account` | session | DPDP erasure: anonymises personal data, keeps financial records |
@@ -195,7 +196,7 @@ from duckies.api import register  # or create test data directly:
 
 # 1. Registration
 frappe.set_user("Administrator")
-from duckies.wallet.api import apply_recharge, get_balance, create_wallet_txn
+from duckies.wallet.api import apply_recharge, get_balance
 
 cust = "CUST-0001"          # any test customer with custom_user set
 

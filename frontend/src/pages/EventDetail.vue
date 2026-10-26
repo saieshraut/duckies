@@ -122,16 +122,22 @@ async function book() {
         </div>
       </div>
 
-      <!-- Sticky book bar -->
-      <div class="fixed inset-x-0 bottom-0 z-20 mx-auto max-w-md border-t border-gray-100 bg-white px-5 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
-        <div class="mb-2 flex items-center justify-between">
-          <span class="text-sm text-gray-500">Total</span>
-          <span class="text-lg font-extrabold text-gray-900">{{ inr(total) }}</span>
+      <!-- Sticky book bar. Teleported to <body> so it escapes the scrollable
+           `.app-scroll` container it would otherwise be nested in — iOS
+           Safari doesn't reliably keep `position: fixed` pinned to the real
+           viewport when its ancestor has -webkit-overflow-scrolling: touch,
+           which was hiding this bar off-screen on iPhone. -->
+      <Teleport to="body">
+        <div class="fixed inset-x-0 bottom-0 z-20 mx-auto max-w-md border-t border-gray-100 bg-white px-5 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+          <div class="mb-2 flex items-center justify-between">
+            <span class="text-sm text-gray-500">Total</span>
+            <span class="text-lg font-extrabold text-gray-900">{{ inr(total) }}</span>
+          </div>
+          <UiButton :loading="booking" :disabled="event.seats_left < 1" @click="book">
+            {{ event.seats_left < 1 ? "Sold out" : "Book with wallet" }}
+          </UiButton>
         </div>
-        <UiButton :loading="booking" :disabled="event.seats_left < 1" @click="book">
-          {{ event.seats_left < 1 ? "Sold out" : "Book with wallet" }}
-        </UiButton>
-      </div>
+      </Teleport>
     </template>
     <EmptyState v-else title="Event not found" />
   </div>

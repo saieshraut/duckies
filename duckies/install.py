@@ -48,6 +48,7 @@ def after_install():
     make_item_groups()
     seed_spaces()
     set_default_settings()
+    enable_mobile_login()
     frappe.db.commit()
 
 
@@ -260,6 +261,15 @@ def set_default_settings():
     s.enforce_wallet_only = 1
     s.flags.ignore_permissions = True
     s.save()
+
+
+def enable_mobile_login():
+    """Customers register with a mobile number (api.register) and should be
+    able to log in with either that or their email — this System Settings
+    flag is what makes Frappe's built-in /api/method/login accept a mobile
+    number as `usr` (see User.find_by_credentials)."""
+    frappe.db.set_single_value(
+        "System Settings", "allow_login_using_mobile_number", 1)
 
 
 # --------------------------------------------------------------------------

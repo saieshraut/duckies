@@ -97,9 +97,12 @@ Excise (bar), FSSAI (kitchen), Trade Licence + Shops & Establishments, Fire
 NOC (Groove Room seats 50 → assembly norms), **PPL + IPRS** (recorded &
 live music), **commercial screening/viewing rights** for sports and film
 nights, and local entertainment/sound permits. Several take months — start
-early. Age-gate alcohol: the web app blocks `custom_age_restricted` items
-(`place_order`), and the bar must verify age in person (drinking age 18 in
-Goa).
+early. Age-gate alcohol: the app menu is view-only (all ordering is billed
+at the counter/table via ERPNext POS — see `place_order` in api.py), so
+`custom_age_restricted` is informational only and the bar staff must verify
+age in person for every alcohol sale (drinking age 18 in Goa). If in-app
+ordering is ever re-enabled, rebuild an age check into that endpoint before
+launch.
 
 ## 6. Audit trail
 

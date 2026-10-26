@@ -133,17 +133,11 @@ duckies.ScanCustomer = class ScanCustomer {
 		});
 	}
 
-	showResult(c) {
-		const fmt = (v) => format_currency(v, erpnext.get_currency(frappe.defaults.get_default("company")));
+	showResult(mobile) {
 		this.$result.html(`
 			<div class="scan-result-card" style="border:1px solid var(--border-color); border-radius:8px; padding:16px;">
-				<div style="font-size: 18px; font-weight: 600;">${frappe.utils.escape_html(c.name || c.customer)}</div>
-				<div class="text-muted small" style="margin-bottom:8px;">${frappe.utils.escape_html(c.customer)} ${c.mobile ? " · " + frappe.utils.escape_html(c.mobile) : ""}</div>
-				<div style="display:flex; gap:24px; margin-top:8px;">
-					<div><div class="text-muted small">${__("Wallet Balance")}</div><div style="font-size:16px; font-weight:600;">${fmt(c.wallet_balance)}</div></div>
-					<div><div class="text-muted small">${__("Cash")}</div><div>${fmt(c.cash_balance)}</div></div>
-					<div><div class="text-muted small">${__("Bonus")}</div><div>${fmt(c.bonus_balance)}</div></div>
-				</div>
+				<div class="text-muted small">${__("Customer Phone Number")}</div>
+				<div style="font-size: 22px; font-weight: 600;">${frappe.utils.escape_html(mobile)}</div>
 			</div>
 		`);
 	}
